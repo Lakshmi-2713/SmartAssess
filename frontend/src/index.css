@@ -1,0 +1,199 @@
+/* SmartAssess — Global Dark & Light Theme System & Role Differentiation */
+
+:root, [data-theme="dark"] {
+  /* Dark Base Colors */
+  --bg-main: #090d16;
+  --bg-surface: #141c2e;
+  --bg-sidebar: #0b1120;
+  --bg-card: #141c2e;
+  --bg-card-hover: #1f2c48;
+  --bg-input: #0e1626;
+  --border-color: #273552;
+  --border-glow: rgba(255, 255, 255, 0.1);
+
+  /* Text Colors */
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+
+  /* Role Branding Colors */
+  --faculty-accent: #10b981;
+  --faculty-hover: #059669;
+  --faculty-bg: rgba(16, 185, 129, 0.12);
+  --faculty-border: rgba(16, 185, 129, 0.35);
+
+  --student-accent: #6366f1;
+  --student-hover: #4f46e5;
+  --student-bg: rgba(99, 102, 241, 0.12);
+  --student-border: rgba(99, 102, 241, 0.35);
+
+  --admin-accent: #f59e0b;
+  --admin-hover: #d97706;
+  --admin-bg: rgba(245, 158, 11, 0.12);
+  --admin-border: rgba(245, 158, 11, 0.35);
+
+  --primary-accent: #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-bg-subtle: rgba(59, 130, 246, 0.15);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="light"] {
+  /* Light Base Colors */
+  --bg-main: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --bg-input: #f8fafc;
+  --border-color: #e2e8f0;
+  --border-glow: rgba(0, 0, 0, 0.05);
+
+  /* Light Text Colors */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+
+  /* Role Branding Colors (Light Mode) */
+  --faculty-accent: #059669;
+  --faculty-hover: #047857;
+  --faculty-bg: #ecfdf5;
+  --faculty-border: #a7f3d0;
+
+  --student-accent: #4f46e5;
+  --student-hover: #4338ca;
+  --student-bg: #eef2ff;
+  --student-border: #c7d2fe;
+
+  --admin-accent: #d97706;
+  --admin-hover: #b45309;
+  --admin-bg: #fffbeb;
+  --admin-border: #fde68a;
+
+  --primary-accent: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-bg-subtle: #eff6ff;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-main);
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-main);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-accent);
+}
+
+/* Role Banner Badges */
+.role-badge-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 22px;
+  border-radius: 14px;
+  margin-bottom: 20px;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transition: all 0.25s ease;
+}
+
+.role-badge-header.faculty-mode {
+  background: var(--faculty-bg);
+  border: 1px solid var(--faculty-border);
+  color: var(--faculty-accent);
+}
+
+.role-badge-header.student-mode {
+  background: var(--student-bg);
+  border: 1px solid var(--student-border);
+  color: var(--student-accent);
+}
+
+.role-badge-header.admin-mode {
+  background: var(--admin-bg);
+  border: 1px solid var(--admin-border);
+  color: var(--admin-accent);
+}
+
+.role-pill-tag {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.faculty-mode .role-pill-tag {
+  background: var(--faculty-accent);
+  color: #ffffff;
+}
+
+.student-mode .role-pill-tag {
+  background: var(--student-accent);
+  color: #ffffff;
+}
+
+.admin-mode .role-pill-tag {
+  background: var(--admin-accent);
+  color: #ffffff;
+}
+
+/* Common Layout Utils */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

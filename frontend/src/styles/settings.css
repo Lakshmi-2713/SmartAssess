@@ -1,0 +1,240 @@
+/* Settings Page Dark Styling */
+
+.settings-layout-container {
+  display: flex;
+  min-height: 100vh;
+  background-color: #090d16;
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-main-content {
+  margin-left: 260px;
+  flex: 1;
+  width: calc(100% - 260px);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.settings-dashboard-body {
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.settings-top-header {
+  margin-bottom: 4px;
+}
+
+.settings-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+  margin: 0 0 4px 0;
+}
+
+.settings-sub {
+  font-size: 13.5px;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.settings-alert-success {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+  padding: 12px 16px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Grid layout */
+.settings-content-grid {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 28px;
+}
+
+/* Sub nav */
+.settings-sub-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sub-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #141c2e;
+  border: 1px solid #273552;
+  color: #94a3b8;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.sub-nav-btn:hover {
+  background: #1f2c48;
+  color: #ffffff;
+}
+
+.sub-nav-btn.active {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #ffffff;
+  border-color: #3b82f6;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.3);
+}
+
+/* Right card panel */
+.settings-card-panel {
+  background: #141c2e;
+  border: 1px solid #273552;
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.panel-section-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #1f2c48;
+}
+
+.profile-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.form-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-input-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.form-input-group input, .form-input-group select {
+  background: #0e1626;
+  border: 1px solid #273552;
+  border-radius: 10px;
+  padding: 11px 16px;
+  color: #ffffff;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.form-input-group input:focus, .form-input-group select:focus {
+  border-color: #3b82f6;
+}
+
+.form-row-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+/* Profile Picture Section */
+.profile-picture-section {
+  margin-top: 6px;
+}
+
+.avatar-flex-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 8px;
+}
+
+.avatar-preview-img {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid #273552;
+}
+
+.avatar-action-btns {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-change-photo {
+  background: #1f2c48;
+  border: 1px solid #273552;
+  color: #ffffff;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-remove-photo {
+  background: transparent;
+  border: 1px solid #273552;
+  color: #94a3b8;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.form-submit-row {
+  margin-top: 10px;
+}
+
+.btn-save-changes-blue {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #ffffff;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35);
+  transition: all 0.2s ease;
+}
+
+.btn-save-changes-blue:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 1024px) {
+  .settings-main-content {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 860px) {
+  .settings-content-grid {
+    grid-template-columns: 1fr;
+  }
+  .form-row-two-col {
+    grid-template-columns: 1fr;
+  }
+}

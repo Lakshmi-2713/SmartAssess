@@ -1,0 +1,149 @@
+/* Responsive Admin Dashboard CSS — Supports Full Theme & Mobile */
+
+.admin-container {
+  display: flex;
+  width: 100%;
+  min-height: 100vh;
+  background: var(--bg-main, #090d16);
+  color: var(--text-primary, #f8fafc);
+}
+
+.main-content {
+  margin-left: 260px;
+  flex: 1;
+  width: calc(100% - 260px);
+  max-width: calc(100% - 260px);
+  padding: 24px 32px;
+  min-height: 100vh;
+  background: var(--bg-main, #090d16);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18px;
+}
+
+.card {
+  padding: 22px 24px;
+  border-radius: 16px;
+  color: white;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.card:nth-child(1) { background: linear-gradient(135deg, #2563eb, #1d4ed8); }
+.card:nth-child(2) { background: linear-gradient(135deg, #10b981, #059669); }
+.card:nth-child(3) { background: linear-gradient(135deg, #7c3aed, #6d28d9); }
+.card:nth-child(4) { background: linear-gradient(135deg, #f59e0b, #d97706); }
+
+.card:hover { transform: translateY(-4px); }
+
+.card h3 { font-size: 13.5px; margin-bottom: 8px; font-weight: 600; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.5px; }
+.card h1 { font-size: 32px; margin: 0; font-weight: 800; }
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 24px;
+}
+
+.activity, .students {
+  background: var(--bg-surface, #141c2e);
+  border: 1px solid var(--border-color, #273552);
+  padding: 22px 24px;
+  border-radius: 16px;
+  color: var(--text-primary, #f8fafc);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+}
+
+.activity h2, .students h2 {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 18px;
+  color: var(--text-primary, #f8fafc);
+}
+
+.activity-item {
+  background: var(--bg-card-hover, #1f2c48);
+  border: 1px solid var(--border-color, #273552);
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  color: var(--text-primary, #f8fafc);
+  font-size: 13.5px;
+}
+
+.students table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.students th {
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text-muted, #94a3b8);
+  padding: 12px 14px;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color, #273552);
+}
+
+.students td {
+  padding: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary, #cbd5e1);
+  font-size: 13.5px;
+}
+
+.students tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+@media (max-width: 1024px) {
+  .main-content {
+    margin-left: 0;
+    width: 100%;
+    max-width: 100%;
+    padding: 16px;
+  }
+
+  .cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .cards {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+  .card {
+    padding: 16px;
+  }
+  .card h1 {
+    font-size: 24px;
+  }
+  .card h3 {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .cards {
+    grid-template-columns: 1fr;
+  }
+}
