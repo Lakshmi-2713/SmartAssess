@@ -31,7 +31,7 @@ import {
   saveStoredResults,
   nextId,
 } from "../services/storage";
-import { faceDetector } from "../services/faceDetector";
+import { faceDetector, ENGINE } from "../services/faceDetector";
 import { audioAlerts } from "../services/audioAlerts";
 import { getUser, safeGet } from "../services/session";
 import { QUESTION_BANKS } from "../data/questionBanks";
@@ -106,9 +106,10 @@ export default function TakeTest() {
   const [detection, setDetection] = useState({
     faces: [], faceCount: 0, status: "initializing",
     isCentered: true, lightingOk: true,
-    message: "Initialising proctoring engine…",
+    message: "Loading face-detection model…",
   });
   const [simulationMode, setSimulationMode] = useState("none");
+  const [engineState, setEngineState] = useState(ENGINE.LOADING);
 
   const [violations, setViolations] = useState([]);
   const [strikes, setStrikes] = useState(0);
@@ -253,6 +254,23 @@ export default function TakeTest() {
   /* Always release the camera on unmount. */
   useEffect(() => stopStream, [stopStream]);
 
+  /* Start loading the detection model immediately — it is ~230 KB of weights
+     plus a WASM runtime, so kicking it off at mount means it is usually ready
+     by the time the candidate has granted camera access. */
+  useEffect(() => {
+    let cancelled = false;
+    faceDetector.init().then((ok) => {
+      if (cancelled) return;
+      setEngineState(ok ? ENGINE.READY : ENGINE.UNAVAILABLE);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* Free the model when leaving the exam. */
+  useEffect(() => () => faceDetector.close(), []);
+
   /* ── Submission ──────────────────────────────────────────── */
   const score = useMemo(() => {
     const perQuestion = testMeta.totalMarks / questions.length;
@@ -319,6 +337,9 @@ export default function TakeTest() {
         totalStrikes: strikes,
         violationsList: violations,
         cameraVerified: camStatus === "active",
+        // Whether automatic identity checks were actually running. A degraded
+        // attempt must be visible to whoever reviews the paper.
+        faceDetection: engineState === ENGINE.READY ? "active" : "unavailable",
       },
     };
 
@@ -345,7 +366,7 @@ export default function TakeTest() {
     setPhase("submitted");
   }, [
     answers, questions, score, testMeta, trustScore, strikes,
-    violations, camStatus, stopStream,
+    violations, camStatus, stopStream, engineState,
   ]);
 
   /* Auto-submit once the strike limit is reached. */
@@ -433,6 +454,15 @@ export default function TakeTest() {
               "critical"
             );
           }
+        } else if (
+          res.status === "loading" ||
+          res.status === "engine_unavailable" ||
+          res.status === "no_feed"
+        ) {
+          // No detector, no judgement — never strike a candidate for a
+          // condition they cannot influence.
+          multiFaceCount.current = 0;
+          noFaceCount.current = 0;
         } else if (res.status === "no_face" || res.faceCount === 0) {
           noFaceCount.current += 1;
           multiFaceCount.current = 0;
@@ -594,7 +624,15 @@ export default function TakeTest() {
      SCREEN 1 — Instructions & system check
      ══════════════════════════════════════════════════════════ */
   if (phase === "instructions") {
-    const ready = camStatus === "active" && detection.faceCount === 1;
+    const engineUnavailable = engineState === ENGINE.UNAVAILABLE;
+    const engineLoading = engineState === ENGINE.LOADING;
+    const faceVerified = detection.faceCount === 1;
+
+    // If the detector genuinely cannot load, fall back to camera-only
+    // verification rather than locking the candidate out of their exam.
+    // The degradation is shown on screen and recorded on the submission.
+    const ready =
+      camStatus === "active" && (faceVerified || engineUnavailable);
 
     return (
       <div className="tt-screen tt-instructions">
@@ -669,10 +707,15 @@ export default function TakeTest() {
                   text={camStatus === "active" ? "Webcam authorised and active" : "Webcam permission required"}
                 />
                 <Check
-                  ok={detection.faceCount === 1}
+                  ok={faceVerified}
+                  optional={engineUnavailable}
                   title="Single face verification"
                   text={
-                    detection.faceCount === 1
+                    engineLoading
+                      ? "Loading the detection model…"
+                      : engineUnavailable
+                      ? "Detector unavailable — proceeding with camera recording only"
+                      : faceVerified
                       ? "Candidate identified"
                       : detection.faceCount > 1
                       ? "Multiple faces — only one person may be visible"
@@ -711,8 +754,29 @@ export default function TakeTest() {
             </button>
             {!ready && (
               <p className="tt-gate-note">
-                <FaExclamationTriangle /> Enable your camera and align your face to unlock the exam.
+                <FaExclamationTriangle />{" "}
+                {camStatus !== "active"
+                  ? "Enable your camera to unlock the exam."
+                  : engineLoading
+                  ? "Loading the face-detection model — this takes a few seconds on first run."
+                  : detection.faceCount > 1
+                  ? "More than one person is visible. Only the candidate may be in frame."
+                  : "Align your face with the centre guide to unlock the exam."}
               </p>
+            )}
+
+            {engineUnavailable && camStatus === "active" && (
+              <div className="alert alert-warning tt-engine-warning">
+                <FaExclamationTriangle />
+                <div className="alert-body">
+                  <div className="alert-title">Face detection could not start</div>
+                  <div>
+                    Your camera is recording and fullscreen rules still apply, but
+                    automatic identity checks are off for this attempt. This is
+                    noted on your submission for the invigilator.
+                  </div>
+                </div>
+              </div>
             )}
           </footer>
         </div>

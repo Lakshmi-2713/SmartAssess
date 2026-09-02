@@ -4,6 +4,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import RouteGuard from "./components/RouteGuard";
 
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import AdminDashboard from "./pages/AdminDashboard";
 import FacultyDashboard from "./pages/FacultyDashboard";
 import StudentDashboard from "./pages/StudentDashboard";
@@ -23,6 +24,7 @@ function App() {
       <ErrorBoundary>
         <Routes>
           <Route path="/" element={<Login />} />
+          <Route path="/register" element={<Register />} />
 
           <Route
             path="/admin"

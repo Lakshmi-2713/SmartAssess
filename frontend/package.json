@@ -9,9 +9,13 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:e2e": "node tests/e2e.test.mjs",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "postinstall": "node scripts/copy-mediapipe-wasm.mjs",
+    "test:proctoring": "node tests/proctoring.test.mjs",
+    "fixtures": "bash tests/make-fixtures.sh"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
     "axios": "^1.19.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

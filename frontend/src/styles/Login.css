@@ -290,3 +290,73 @@
   color: var(--text-muted);
   margin-bottom: calc(var(--sp-2) * -1);
 }
+
+/* ── Registration ───────────────────────────────────────────── */
+.register-shell { max-width: 1100px; }
+.register-shell .login-panel-inner { max-width: 420px; }
+
+/* Password strength meter */
+.pw-strength {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: 2px;
+}
+
+.pw-strength-track {
+  flex: 1;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.pw-strength-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--text-faint);
+  transition: width var(--transition-normal), background-color var(--transition-normal);
+}
+
+.pw-strength-fill.tone-danger  { background: var(--danger); }
+.pw-strength-fill.tone-warning { background: var(--warning); }
+.pw-strength-fill.tone-info    { background: var(--info); }
+.pw-strength-fill.tone-success { background: var(--success); }
+
+.pw-strength-label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semi);
+  white-space: nowrap;
+  min-width: 62px;
+  text-align: right;
+}
+
+.pw-strength-label.tone-danger  { color: var(--danger); }
+.pw-strength-label.tone-warning { color: var(--warning); }
+.pw-strength-label.tone-info    { color: var(--info); }
+.pw-strength-label.tone-success { color: var(--success); }
+
+.login-foot-note .login-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: none;
+}
+.login-foot-note .login-link:hover { text-decoration: underline; }
+
+.alert code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+}
+
+@media (max-width: 900px) {
+  .register-shell { max-width: 480px; }
+}
+
+/* The register brand panel has no metrics row, so distribute its content
+   evenly instead of pushing it to the edges. */
+.register-shell .login-brand { justify-content: center; gap: var(--sp-7); }
+.register-shell .login-brand-foot { margin-top: var(--sp-4); }

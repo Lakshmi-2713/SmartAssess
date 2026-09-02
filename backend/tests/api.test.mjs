@@ -81,8 +81,11 @@ check("PUT on missing id -> 404 not 200/null", ghost.status === 404, `status=${g
 const facDel = await req("DELETE", `/api/students/${sid}`, null, token);
 check("faculty CANNOT delete a student (403)", facDel.status === 403, `status=${facDel.status}`);
 
-// Register an admin to exercise the privileged paths.
-await req("POST", "/api/auth/register", { name: "Root", email: `adm_${rnd}@x.com`, password: "secret123", role: "admin" });
+// Register an admin to exercise the privileged paths. Registration is open
+// for every role, so no signup code is involved.
+await req("POST", "/api/auth/register", {
+  name: "Root", email: `adm_${rnd}@x.com`, password: "secret123", role: "admin",
+});
 const adminLogin = await req("POST", "/api/auth/login", { email: `adm_${rnd}@x.com`, password: "secret123", role: "admin" });
 const adminToken = adminLogin.body?.token;
 check("admin login returns token", !!adminToken, `status=${adminLogin.status}`);
@@ -121,6 +124,54 @@ const badEmail = await req("POST", "/api/students", { name: "BadMail", email: "n
 check("malformed email rejected (400)", badEmail.status === 400, `status=${badEmail.status}`);
 const badStatus = await req("POST", "/api/students", { name: "BadStat", email: `bs_${rnd}@s.com`, department: "CS", semester: 1, phone: "1", status: "Zombie" }, token);
 check("invalid status rejected (400)", badStatus.status === 400, `status=${badStatus.status}`);
+
+console.log("\n=== OPEN REGISTRATION ===");
+// Registration is deliberately open for all three roles.
+const openStudent = await req("POST", "/api/auth/register", {
+  name: "Open Student", email: `openstu_${rnd}@x.com`, password: "secret123", role: "student",
+});
+check("students can self-register (201)", openStudent.status === 201, `status=${openStudent.status}`);
+
+const openFaculty = await req("POST", "/api/auth/register", {
+  name: "Open Faculty", email: `openfac_${rnd}@x.com`, password: "secret123", role: "faculty",
+});
+check("faculty can self-register (201)", openFaculty.status === 201, `status=${openFaculty.status}`);
+
+const openAdmin = await req("POST", "/api/auth/register", {
+  name: "Open Admin", email: `openadm_${rnd}@x.com`, password: "secret123", role: "admin",
+});
+check(
+  "admins can self-register too — no code required (201)",
+  openAdmin.status === 201,
+  `status=${openAdmin.status} body=${JSON.stringify(openAdmin.body).slice(0, 160)}`
+);
+check(
+  "a self-registered admin really has the admin role",
+  openAdmin.body?.user?.role === "admin",
+  `role=${openAdmin.body?.user?.role}`
+);
+
+const openAdminLogin = await req("POST", "/api/auth/login", {
+  email: `openadm_${rnd}@x.com`, password: "secret123",
+});
+check(
+  "a self-registered admin can sign in and gets a token",
+  openAdminLogin.status === 200 && Boolean(openAdminLogin.body?.token),
+  `status=${openAdminLogin.status}`
+);
+const openAdminStats = await req("GET", "/api/admin/stats", null, openAdminLogin.body?.token);
+check(
+  "a self-registered admin can reach admin-only routes",
+  openAdminStats.status === 200,
+  `status=${openAdminStats.status}`
+);
+
+const noPolicy = await req("GET", "/api/auth/signup-policy");
+check(
+  "the signup-policy endpoint is gone (404)",
+  noPolicy.status === 404,
+  `status=${noPolicy.status}`
+);
 
 console.log("\n=== HEADERS / HEALTH ===");
 const health = await req("GET", "/api/health");

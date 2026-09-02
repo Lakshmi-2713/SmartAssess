@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import {
   FaGraduationCap,
   FaLock,
@@ -320,8 +320,10 @@ export default function Login() {
             </form>
 
             <p className="login-foot-note">
-              No account yet? Your institution&apos;s administrator provisions
-              access.
+              No account yet?{" "}
+              <Link to="/register" className="login-link">
+                Create one
+              </Link>
             </p>
           </div>
         </main>

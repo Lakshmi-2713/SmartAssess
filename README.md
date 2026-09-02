@@ -52,16 +52,18 @@ cp .env.example .env.local   # optional; defaults to http://localhost:5000/api
 npm run dev                  # http://localhost:5173
 ```
 
-### Creating the first account
+### Creating an account
 
-There is no self-service signup. Create an admin from the command line, then
-provision everyone else through the UI:
+Open **http://localhost:5173/register** and sign up.
 
-```bash
-curl -X POST http://localhost:5000/api/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"System Admin","email":"admin@your-school.edu","password":"choose-a-strong-one","role":"admin"}'
-```
+**Registration is open for all three roles** — student, faculty and admin.
+Pick a role on the form and that is the role you get; there is no invitation,
+approval step or signup code. Registering signs you straight in.
+
+> Because `/api/auth/register` is a public endpoint, anyone who can reach the
+> server can create an administrator. That is fine for coursework and local
+> development. Before exposing this beyond a trusted network, restrict admin
+> creation to existing admins.
 
 ---
 
@@ -79,7 +81,7 @@ backend/
   models/                   Mongoose schemas with real validation
   routes/                   auth / students / faculty / admin
   utils/                    JWT, ApiError, asyncHandler, regex escaping
-  tests/api.test.mjs        44 API integration checks
+  tests/api.test.mjs        51 API integration checks
 
 frontend/src/
   components/               Sidebar, Navbar, modals, RouteGuard, ErrorBoundary
@@ -94,15 +96,32 @@ frontend/src/
     api.js                  Axios + auth interceptor + error normalisation
     session.js              Single source of truth for the session
     storage.js              Local data, non-destructive on corrupt values
-    faceDetector.js         Proctoring vision engine
+    faceDetector.js         Proctoring vision engine (MediaPipe BlazeFace)
     audioAlerts.js          Web Audio cues
   styles/
     index.css (root)        Design tokens: colour, type, spacing, motion
     primitives.css          Buttons, cards, tables, modals, forms, toasts
     *.css                   Per-page styles composed from the primitives
   utils/format.js           Shared formatters
-  tests/e2e.test.mjs        54 browser end-to-end checks
+  tests/e2e.test.mjs        69 browser end-to-end checks
+  tests/proctoring.test.mjs 12 face-detection checks (real camera stream)
 ```
+
+### Face detection
+
+Proctoring uses **MediaPipe BlazeFace**, served from this app's own origin
+rather than a CDN — school networks routinely block third-party CDNs, and an
+exam should not depend on one being reachable.
+
+- The 230 KB model lives in `frontend/public/models/`.
+- The WASM runtime is copied out of `node_modules` into
+  `frontend/public/mediapipe-wasm/` by a `postinstall` script, so `npm install`
+  is all that is needed. It is git-ignored (22 MB).
+
+If the model cannot load, the app **does not lock students out**: the camera
+still records, fullscreen rules still apply, the screen says identity checks
+are off, and the submission is marked
+`proctoring.faceDetection: "unavailable"` for the invigilator.
 
 ### Authorisation model
 
@@ -133,7 +152,7 @@ cd backend
 PORT=5099 MONGO_URI="mongodb://127.0.0.1:27099/smartassess_test" \
   JWT_SECRET=testsecret CORS_ORIGIN='*' node server.js
 
-# 3. API integration suite  (44 checks)
+# 3. API integration suite  (51 checks)
 BASE=http://127.0.0.1:5099 npm run test:api
 
 # 4. Front end pointed at the test API
@@ -141,9 +160,13 @@ cd ../frontend
 echo 'VITE_API_URL=http://127.0.0.1:5099/api' > .env.local
 npx vite --port 5199
 
-# 5. Browser end-to-end suite  (54 checks)
+# 5. Browser end-to-end suite  (69 checks)
 npx playwright install chromium      # first run only
 BASE=http://localhost:5199 API=http://127.0.0.1:5099/api npm run test:e2e
+
+# 6. Face-detection suite  (12 checks, needs ffmpeg)
+npm run fixtures                     # builds Y4M videos used as a fake webcam
+BASE=http://localhost:5199 API=http://127.0.0.1:5099/api npm run test:proctoring
 ```
 
 Also:
@@ -188,3 +211,7 @@ To restyle the product, change the tokens — not the component files.
 - **Proctoring runs entirely client-side** and is best-effort. It raises the
   cost of casual cheating; it is not a guarantee, and a determined candidate
   can defeat it. Treat violation logs as signals for human review.
+- **Registration is fully open, including admin.** Anyone who can reach the
+  API can create an administrator account. This is deliberate for coursework;
+  it is not suitable for a public deployment. The fix, when you need one, is to
+  restrict `role: "admin"` to requests authenticated as an existing admin.

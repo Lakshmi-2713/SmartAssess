@@ -39,8 +39,10 @@ async function seedAccounts() {
       }),
     });
     if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
       throw new Error(
-        `Could not provision the ${role} account (${res.status}). Is the API running at ${API}?`
+        `Could not provision the ${role} account (${res.status}: ${body.message || "?"}). ` +
+          `Is the API running at ${API}?`
       );
     }
   }
@@ -175,6 +177,168 @@ const run = async () => {
     `landed on ${page.url()}`
   );
   await context.unroute("**/api/auth/login");
+
+  /* ─────────────────────────────────────────────────────────
+     1b. REGISTRATION
+     ───────────────────────────────────────────────────────── */
+  section("Registration");
+
+  await page.goto(BASE, { waitUntil: "networkidle" });
+  check(
+    "sign-in page links to registration",
+    await page.isVisible('a[href="/register"]'),
+    "no link found"
+  );
+
+  await page.goto(`${BASE}/register`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(600);
+  check("registration page renders", await page.isVisible("#reg-email"), page.url());
+  check(
+    "all three roles are offered",
+    (await page.$$(".role-chip")).length === 3,
+    `${(await page.$$(".role-chip")).length} chips`
+  );
+
+  // Validation
+  await page.fill("#reg-name", "X");
+  await page.fill("#reg-email", "not-an-email");
+  await page.fill("#reg-password", "short");
+  await page.fill("#reg-confirm", "different");
+  await page.click('button[type="submit"]');
+  await page.waitForSelector(".field-error", { timeout: 5000 }).catch(() => {});
+  const regErrors = await page.$$eval(".field-error", (els) => els.map((e) => e.textContent.trim()));
+  check(
+    "invalid registration shows inline errors",
+    regErrors.length >= 3,
+    `got ${regErrors.length}: ${JSON.stringify(regErrors)}`
+  );
+  check(
+    "an invalid form does not create an account",
+    (await page.evaluate(() => localStorage.getItem("smartassess_session"))) === null,
+    "a session was created"
+  );
+
+  // Mismatched confirmation specifically
+  await page.fill("#reg-name", "Mismatch Test");
+  await page.fill("#reg-email", `mismatch_${RUN}@smartassess.test`);
+  await page.fill("#reg-password", "GoodPassword1");
+  await page.fill("#reg-confirm", "OtherPassword1");
+  await page.click('button[type="submit"]');
+  await page.waitForTimeout(500);
+  check(
+    "mismatched passwords are rejected",
+    (await page.$$eval(".field-error", (e) => e.map((x) => x.textContent))).some((t) =>
+      t.includes("do not match")
+    ),
+    "no mismatch error"
+  );
+
+  // Password strength meter
+  await page.fill("#reg-password", "aaaaaaaa");
+  await page.waitForTimeout(250);
+  const weak = await page.textContent(".pw-strength-label").catch(() => "");
+  await page.fill("#reg-password", "Str0ng&Passw0rd!2024");
+  await page.waitForTimeout(250);
+  const strong = await page.textContent(".pw-strength-label").catch(() => "");
+  check("password strength meter responds", weak !== strong, `"${weak}" vs "${strong}"`);
+
+  // A real student registration
+  const regStudent = `selfreg_${RUN}@smartassess.test`;
+  await page.click(".role-chip.tone-student");
+  await page.fill("#reg-name", "Self Registered Student");
+  await page.fill("#reg-email", regStudent);
+  await page.fill("#reg-password", "SelfRegPass1");
+  await page.fill("#reg-confirm", "SelfRegPass1");
+  await page.click('button[type="submit"]');
+  await page
+    .waitForFunction(() => localStorage.getItem("smartassess_session") !== null, null, {
+      timeout: 15000,
+    })
+    .catch(() => {});
+  check(
+    "a student can self-register and is signed straight in",
+    page.url().includes("/student"),
+    `landed on ${page.url()}`
+  );
+
+  const regRole = await page.evaluate(
+    () => JSON.parse(localStorage.getItem("smartassess_session") || "{}")?.user?.role
+  );
+  check("the new account has the student role", regRole === "student", `got ${regRole}`);
+
+  // Duplicate email must be refused
+  await page.evaluate(() => localStorage.clear());
+  await page.goto(`${BASE}/register`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(500);
+  await page.fill("#reg-name", "Duplicate");
+  await page.fill("#reg-email", regStudent);
+  await page.fill("#reg-password", "SelfRegPass1");
+  await page.fill("#reg-confirm", "SelfRegPass1");
+  await page.click('button[type="submit"]');
+  await page.waitForSelector(".alert-error", { timeout: 8000 }).catch(() => {});
+  check(
+    "a duplicate email is refused",
+    await page.isVisible(".alert-error"),
+    "no error shown"
+  );
+
+  // Admin self-registration — deliberately open, same as any other role.
+  await page.evaluate(() => localStorage.clear());
+  await page.goto(`${BASE}/register`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(500);
+  check(
+    "the admin role chip is selectable (not gated)",
+    await page.isEnabled(".role-chip.tone-admin"),
+    "admin chip is disabled"
+  );
+  await page.click(".role-chip.tone-admin");
+  await page.fill("#reg-name", "Self Registered Admin");
+  await page.fill("#reg-email", `selfregadm_${RUN}@smartassess.test`);
+  await page.fill("#reg-password", "SelfRegAdm1");
+  await page.fill("#reg-confirm", "SelfRegAdm1");
+  check(
+    "no signup-code field is shown",
+    !(await page.isVisible("#reg-code")),
+    "a signup code field is still rendered"
+  );
+  await page.click('button[type="submit"]');
+  await page
+    .waitForFunction(() => localStorage.getItem("smartassess_session") !== null, null, {
+      timeout: 15000,
+    })
+    .catch(() => {});
+  check(
+    "an admin can self-register and lands on /admin",
+    page.url().includes("/admin"),
+    `landed on ${page.url()}`
+  );
+  const newAdminRole = await page.evaluate(
+    () => JSON.parse(localStorage.getItem("smartassess_session") || "{}")?.user?.role
+  );
+  check("the new account really has the admin role", newAdminRole === "admin", `got ${newAdminRole}`);
+
+  // Faculty self-registration
+  await page.evaluate(() => localStorage.clear());
+  await page.goto(`${BASE}/register`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(500);
+  await page.click(".role-chip.tone-faculty");
+  await page.fill("#reg-name", "Self Registered Faculty");
+  await page.fill("#reg-email", `selfregfac_${RUN}@smartassess.test`);
+  await page.fill("#reg-password", "SelfRegFac1");
+  await page.fill("#reg-confirm", "SelfRegFac1");
+  await page.click('button[type="submit"]');
+  await page
+    .waitForFunction(() => localStorage.getItem("smartassess_session") !== null, null, {
+      timeout: 15000,
+    })
+    .catch(() => {});
+  check(
+    "faculty can self-register",
+    page.url().includes("/faculty"),
+    `landed on ${page.url()}`
+  );
+
+  await page.evaluate(() => localStorage.clear());
 
   /* ─────────────────────────────────────────────────────────
      2. ROUTE GUARDS

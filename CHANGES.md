@@ -3,7 +3,7 @@
 A full audit, bug-fix and redesign pass over the codebase.
 
 **Scope:** 56 files changed · 26 added · 3 removed
-**Verification:** ESLint 66 problems → **0** · API suite **44/44** · Browser E2E **54/54** · production build clean
+**Verification:** ESLint **0 problems** · API **51/51** · Browser E2E **69/69** · Proctoring **12/12** · production build clean
 
 Every fix below was reproduced before the change and verified after, against a
 real MongoDB and a real Chromium — not just read.
@@ -221,67 +221,78 @@ rows. Verified at 390 / 768 / 1440px with zero horizontal overflow.
 
 ---
 
-## 7. Seeding script — `backend/scripts/seed.js`
+## 7. Face detection rebuilt
 
-Creates or resets one account per role with **freshly generated random
-passwords**, printed once. Reads `MONGO_URI` from `.env`, so it runs on any
-machine. The API does **not** need to be running — it talks to MongoDB directly.
+**Symptom:** no face was ever detected, so the exam could never be started.
 
-```bash
-cd backend
-npm run seed
-```
+**Two causes, both fatal:**
 
-```
-  ROLE     EMAIL                      PASSWORD
-  ───────  ─────────────────────────  ────────────────────
-  admin    admin@smartassess.local    XtvG7-JtmTC-bvCmc#29  reset
-  faculty  faculty@smartassess.local  k2Pkg-MQvEK-Smeiy#28  reset
-  student  student@smartassess.local  LWZkt-znwea-sUmK2#23  reset
-```
+1. The old engine's first choice was the browser's `FaceDetector` API — which
+   is **not available in Chrome or Edge on Windows** unless an experimental
+   flag is set. On a normal Windows machine it simply does not exist.
+2. The fallback was a hand-rolled skin-chroma heuristic: it required 5% of the
+   frame to fall inside a narrow RGB range, then a blob passing size *and*
+   luminance-variance thresholds. In practice it matched almost nothing, and
+   what it did match depended heavily on skin tone and lighting.
 
-### Options
+**Replaced with MediaPipe BlazeFace** (`@mediapipe/tasks-vision`) — a real ML
+model that works across skin tones, lighting and camera quality.
 
-| Flag | Effect |
-|---|---|
-| *(none)* | admin + faculty + student |
-| `--with-roster` | also seeds 6 sample students on the roster |
-| `--roles admin,faculty` | only the roles you name |
-| `--domain acme.edu` | `admin@acme.edu`, etc. |
-| `--password 'MyPass1'` | fixed password instead of random |
-| `--rotate-secret` | write a fresh `JWT_SECRET` to `.env` (backs up to `.env.bak`) |
-| `--purge` / `npm run seed:purge` | delete everything it created |
-| `--force` | override the production guard |
+- **Served from our own origin**, not a CDN. School networks routinely block
+  third-party CDNs, and an exam must not depend on one being reachable. The
+  230 KB model is committed; the 22 MB WASM runtime is copied out of
+  `node_modules` by a `postinstall` script and git-ignored.
+- **Lazy-loaded** — MediaPipe is a dynamic import, so it lands in its own
+  153 KB chunk and only the exam screen pays for it.
+- **GPU with CPU fallback**, because some Windows drivers refuse the GPU
+  delegate.
 
-### Design notes
+### The exam is no longer unstartable
 
-- **Passwords**: ~77 bits of entropy from an unambiguous alphabet (no `0/O`,
-  `1/l/I`), grouped as `xxxxx-xxxxx-xxxxx#NN` so they are readable aloud and
-  typeable — not the `Admin@123` class.
-- **Hashing**: assigns and `save()`s through the Mongoose model so the
-  pre-save hook hashes. A raw password is never written to the collection.
-- **Idempotent**: re-running resets the password on existing accounts rather
-  than erroring, so it is always a way back in.
-- **Production guard**: refuses to run against a `mongodb+srv://` URI, anything
-  matching `/prod/`, or `NODE_ENV=production`, unless `--force`.
-- **Warns** if `JWT_SECRET` is missing, short, or a placeholder.
+The gate was `camStatus === "active" && detection.faceCount === 1`. With
+detection broken that condition could never be met, so students were locked
+out of their own exam with no way forward.
 
-### Verified
-
-- Generated passwords **actually authenticate** through `/api/auth/login`, all three roles
-- Re-running resets rather than failing on duplicates
-- `--with-roster` is idempotent (second run: `0 added`)
-- `--purge` removes exactly the accounts for that domain
-- Production guard blocks a simulated Atlas URI
+Now: if the model genuinely cannot load, the app **degrades instead of
+blocking** — the camera still records, fullscreen rules still apply, the
+screen says plainly that identity checks are off, and
+`proctoring.faceDetection: "unavailable"` is written onto the submission so an
+invigilator can see it. Candidates are also never struck for "no face" while
+the model is loading or missing — a condition they cannot influence.
 
 ---
 
-## 8. Tests added
+## 8. Registration pages
+
+A public `/register` page for **all three roles**, linked from sign-in.
+Registering signs you straight in.
+
+- Client-side validation with inline errors, a live password-strength meter,
+  and confirmation matching
+- Role picker themed per role (student indigo, faculty teal, admin amber)
+- No invitation, approval step or signup code — the role you pick is the role
+  you get
+
+### A note on openness
+
+An earlier iteration gated admin signup behind a first-run bootstrap plus an
+`ADMIN_SIGNUP_CODE`. That was removed at the project owner's direction:
+registration should work the same way for every role.
+
+The trade-off is recorded plainly rather than hidden: `/api/auth/register` is
+public, so **anyone who can reach the server can create an administrator**.
+Acceptable for coursework and local development; not suitable for a public
+deployment. The fix, when needed, is to require an authenticated admin session
+for `role: "admin"` rather than to re-introduce a shared secret.
+
+---
+
+## 9. Tests added
 
 Both suites run against a live server. **Never point them at production** —
 they create and delete records.
 
-### `backend/tests/api.test.mjs` — 44 checks
+### `backend/tests/api.test.mjs` — 51 checks
 
 Auth and token issuance, JWT guards, role authorisation (including privilege
 escalation attempts), validation bounds, mass assignment, regex safety,
@@ -291,7 +302,7 @@ duplicate handling, error-code correctness, security headers.
 BASE=http://127.0.0.1:5099 npm run test:api
 ```
 
-### `frontend/tests/e2e.test.mjs` — 54 checks
+### `frontend/tests/e2e.test.mjs` — 69 checks
 
 Real Chromium via Playwright. Each check targets a defect that was actually
 present, so a regression fails loudly:
@@ -313,12 +324,29 @@ npx playwright install chromium      # first run only
 BASE=http://localhost:5199 API=http://127.0.0.1:5099/api npm run test:e2e
 ```
 
+### `frontend/tests/proctoring.test.mjs` — 12 checks
+
+Face detection against a **real camera stream**. Chromium is handed a Y4M video
+as its webcam, so the model sees actual frames rather than a stub — the only
+way to prove detection genuinely works. Unit tests around the model would have
+kept passing while the old engine detected nothing.
+
+Covers: the engine loading at all, model and WASM served from our origin, a
+real face being detected, two faces flagged as a violation, an empty room
+reporting no face, and — critically — that a **blocked model still lets the
+student start**.
+
+```bash
+npm run fixtures            # needs ffmpeg; builds the Y4M camera videos
+npm run test:proctoring
+```
+
 The E2E suite provisions uniquely-named accounts per run, so it is
 order-independent and never trips the brute-force limiter for a later run.
 
 ---
 
-## 9. Structural changes
+## 10. Structural changes
 
 **Added**
 
@@ -357,7 +385,7 @@ imported), and `backend/.env` from git tracking.
 
 ---
 
-## 10. Known limits
+## 11. Known limits
 
 Honest about what is *not* done:
 

@@ -737,3 +737,9 @@
   .tt-toasts { right: var(--sp-2); left: var(--sp-2); max-width: none; }
   .tt-cam-widget.is-expanded { inset: auto var(--sp-2) var(--sp-2) var(--sp-2); width: auto; }
 }
+
+.tt-engine-warning {
+  width: 100%;
+  max-width: 640px;
+  text-align: left;
+}

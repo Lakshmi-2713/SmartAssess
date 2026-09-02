@@ -25,3 +25,9 @@ dist-ssr
 
 .env
 .env.local
+
+# Copied from node_modules by scripts/copy-mediapipe-wasm.mjs
+public/mediapipe-wasm
+
+# Generated camera fixtures (see tests/make-fixtures.sh)
+tests/fixtures

@@ -30,6 +30,9 @@ export const register = asyncHandler(async (req, res) => {
       `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`
     );
   }
+  // Any of the three roles may be self-registered, including `admin`.
+  // This is an intentional product decision: registration is open, and the
+  // role a person picks is the role they get.
   if (!VALID_ROLES.includes(role)) {
     throw ApiError.badRequest(`Role must be one of: ${VALID_ROLES.join(", ")}.`);
   }
