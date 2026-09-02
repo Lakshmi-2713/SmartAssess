@@ -1,104 +1,117 @@
-// Proctoring Audio Alerts using Web Audio API (No external sound files required)
+/**
+ * Proctoring audio cues via the Web Audio API — no sound files required.
+ */
 
 class AudioAlertService {
   constructor() {
     this.ctx = null;
+    this.unavailable = false;
   }
 
-  initContext() {
+  /**
+   * Lazily create the AudioContext. Browsers block it until a user gesture,
+   * so `resume()` is attempted on every call rather than only at construction.
+   */
+  #ensureContext() {
+    if (this.unavailable) return null;
+
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) {
+      if (!AudioCtx) {
+        this.unavailable = true;
+        return null;
+      }
+      try {
         this.ctx = new AudioCtx();
+      } catch {
+        this.unavailable = true;
+        return null;
       }
     }
-    if (this.ctx && this.ctx.state === "suspended") {
+
+    if (this.ctx.state === "suspended") {
       this.ctx.resume().catch(() => {});
     }
+    return this.ctx;
   }
 
-  // Warning sound: Rapid dual beep for multi-face or urgent security alerts
+  /** Play a short envelope; every node is disposed when it finishes. */
+  #tone({ type, steps, peak, duration }) {
+    const ctx = this.#ensureContext();
+    if (!ctx) return;
+
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = type;
+      for (const [freq, at] of steps) {
+        osc.frequency.setValueAtTime(freq, now + at);
+      }
+
+      gain.gain.setValueAtTime(peak, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + duration);
+
+      // Without this the nodes stay referenced by the graph for the life of
+      // the context — an exam fires hundreds of these.
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {
+          /* already torn down */
+        }
+      };
+    } catch (err) {
+      console.warn("Audio alert failed:", err?.name || err);
+    }
+  }
+
+  /** Urgent dual beep — multiple faces or a critical violation. */
   playMultiFaceAlert() {
-    try {
-      this.initContext();
-      if (!this.ctx) return;
-
-      const now = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(880, now); // A5
-      osc.frequency.setValueAtTime(440, now + 0.1);
-      osc.frequency.setValueAtTime(880, now + 0.2);
-
-      gain.gain.setValueAtTime(0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.35);
-    } catch (e) {
-      console.warn("Audio alert failed", e);
-    }
+    this.#tone({
+      type: "sawtooth",
+      steps: [[880, 0], [440, 0.1], [880, 0.2]],
+      peak: 0.3,
+      duration: 0.35,
+    });
   }
 
-  // Fullscreen violation alert
+  /** Descending buzz — fullscreen or focus violation. */
   playFullscreenViolationAlert() {
-    try {
-      this.initContext();
-      if (!this.ctx) return;
-
-      const now = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = "square";
-      osc.frequency.setValueAtTime(520, now);
-      osc.frequency.exponentialRampToValueAtTime(220, now + 0.4);
-
-      gain.gain.setValueAtTime(0.35, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.45);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.45);
-    } catch (e) {
-      console.warn("Audio alert failed", e);
-    }
+    this.#tone({
+      type: "square",
+      steps: [[520, 0], [300, 0.2], [220, 0.35]],
+      peak: 0.28,
+      duration: 0.45,
+    });
   }
 
-  // Gentle success chime
+  /** Rising chime — success. */
   playSuccessChime() {
-    try {
-      this.initContext();
-      if (!this.ctx) return;
+    this.#tone({
+      type: "sine",
+      steps: [[523.25, 0], [659.25, 0.1], [783.99, 0.2]],
+      peak: 0.18,
+      duration: 0.4,
+    });
+  }
 
-      const now = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(523.25, now); // C5
-      osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
-      osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
-
-      gain.gain.setValueAtTime(0.2, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.4);
-    } catch (e) {
-      console.warn("Audio chime failed", e);
+  /** Release the context, e.g. when leaving the exam. */
+  dispose() {
+    if (this.ctx) {
+      this.ctx.close().catch(() => {});
+      this.ctx = null;
     }
   }
 }
 
 export const audioAlerts = new AudioAlertService();
+export default audioAlerts;

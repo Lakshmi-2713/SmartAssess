@@ -1,149 +1,185 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useState, useEffect, useMemo, useCallback } from "react";
+import { safeGet, safeSet } from "../services/session";
+import {
+  ACCENT_COLORS,
+  DARK_ACCENTS,
+  FONT_SIZES,
+  STORAGE_KEYS as KEYS,
+  DEFAULT_PROFILE,
+} from "./themeTokens";
 
-const ThemeContext = createContext();
+const ThemeContext = createContext(null);
 
-export const ACCENT_COLORS = {
-  indigo: { name: "Indigo", primary: "#6366f1", hover: "#4f46e5", light: "#e0e7ff", bg: "rgba(99, 102, 241, 0.15)" },
-  emerald: { name: "Emerald", primary: "#10b981", hover: "#059669", light: "#d1fae5", bg: "rgba(16, 185, 129, 0.15)" },
-  purple: { name: "Purple", primary: "#8b5cf6", hover: "#7c3aed", light: "#ede9fe", bg: "rgba(139, 92, 246, 0.15)" },
-  amber: { name: "Amber", primary: "#f59e0b", hover: "#d97706", light: "#fef3c7", bg: "rgba(245, 158, 11, 0.15)" },
-  rose: { name: "Rose", primary: "#f43f5e", hover: "#e11d48", light: "#ffe4e6", bg: "rgba(244, 63, 94, 0.15)" },
-  cyan: { name: "Cyber Cyan", primary: "#06b6d4", hover: "#0891b2", light: "#cffaff", bg: "rgba(6, 182, 212, 0.15)" },
+const readString = (key, fallback) => {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const readBool = (key) => {
+  try {
+    return localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
 };
 
 export const ThemeProvider = ({ children }) => {
-  const [themeMode, setThemeMode] = useState(() => {
-    return localStorage.getItem("smartassess_theme_mode") || "dark";
-  });
+  const [themeMode, setThemeMode] = useState(() => readString(KEYS.mode, "system"));
+  const [accentColor, setAccentColor] = useState(() => readString(KEYS.accent, "indigo"));
+  const [fontSize, setFontSize] = useState(() => readString(KEYS.fontSize, "medium"));
+  const [compactSidebar, setCompactSidebar] = useState(() => readBool(KEYS.compact));
+  const [reducedMotion, setReducedMotion] = useState(() => readBool(KEYS.motion));
+  const [highContrast, setHighContrast] = useState(() => readBool(KEYS.contrast));
 
-  const [accentColor, setAccentColor] = useState(() => {
-    return localStorage.getItem("smartassess_accent_color") || "indigo";
-  });
+  const [userProfile, setUserProfile] = useState(() => ({
+    ...DEFAULT_PROFILE,
+    ...(safeGet(KEYS.profile) || {}),
+  }));
 
-  const [fontSize, setFontSize] = useState(() => {
-    return localStorage.getItem("smartassess_font_size") || "medium";
-  });
-
-  const [compactSidebar, setCompactSidebar] = useState(() => {
-    return localStorage.getItem("smartassess_compact_sidebar") === "true";
-  });
-
-  const [reducedMotion, setReducedMotion] = useState(() => {
-    return localStorage.getItem("smartassess_reduced_motion") === "true";
-  });
-
-  const [highContrast, setHighContrast] = useState(() => {
-    return localStorage.getItem("smartassess_high_contrast") === "true";
-  });
-
-  const [userProfile, setUserProfile] = useState(() => {
-    const saved = localStorage.getItem("smartassess_user_profile");
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+  // Tracks the OS preference so "system" mode actually follows it live.
+  const [systemDark, setSystemDark] = useState(() => {
+    try {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    } catch {
+      return false;
     }
-    return {
-      name: "Dr. Sarah Jenkins",
-      email: "sarah.jenkins@smartassess.edu",
-      role: "Lead Faculty & Administrator",
-      department: "Computer Science & AI",
-      phone: "+1 (555) 234-5678",
-      bio: "Passionate educator & researcher specializing in Artificial Intelligence, Automated Evaluation Systems, and Machine Learning algorithms.",
-      location: "San Francisco, CA",
-      avatar: "", // empty defaults to initials avatar
-    };
   });
 
-  // Update localStorage and root CSS variables on changes
   useEffect(() => {
-    localStorage.setItem("smartassess_theme_mode", themeMode);
-    localStorage.setItem("smartassess_accent_color", accentColor);
-    localStorage.setItem("smartassess_font_size", fontSize);
-    localStorage.setItem("smartassess_compact_sidebar", compactSidebar);
-    localStorage.setItem("smartassess_reduced_motion", reducedMotion);
-    localStorage.setItem("smartassess_high_contrast", highContrast);
-
-    const root = document.documentElement;
-
-    // Handle Light/Dark Mode
-    if (themeMode === "light") {
-      root.setAttribute("data-theme", "light");
-    } else if (themeMode === "dark") {
-      root.setAttribute("data-theme", "dark");
-    } else {
-      // System default
-      const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      root.setAttribute("data-theme", systemDark ? "dark" : "light");
+    let mq;
+    try {
+      mq = window.matchMedia("(prefers-color-scheme: dark)");
+    } catch {
+      return undefined;
     }
+    const onChange = (e) => setSystemDark(e.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
 
-    // Apply Accent Color variables
-    const accentObj = ACCENT_COLORS[accentColor] || ACCENT_COLORS.indigo;
-    root.style.setProperty("--primary-accent", accentObj.primary);
-    root.style.setProperty("--primary-hover", accentObj.hover);
-    root.style.setProperty("--primary-light", accentObj.light);
-    root.style.setProperty("--primary-bg-subtle", accentObj.bg);
+  const resolvedMode = themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
 
-    // Apply Font Size variable
-    if (fontSize === "small") {
-      root.style.setProperty("--base-font-size", "14px");
-    } else if (fontSize === "large") {
-      root.style.setProperty("--base-font-size", "18px");
-    } else {
-      root.style.setProperty("--base-font-size", "16px");
-    }
-
-    // Accessibility flags
-    if (highContrast) {
-      root.classList.add("high-contrast");
-    } else {
-      root.classList.remove("high-contrast");
-    }
-
-    if (reducedMotion) {
-      root.classList.add("reduced-motion");
-    } else {
-      root.classList.remove("reduced-motion");
+  /* Persist preferences. Wrapped so a full quota never throws mid-update. */
+  useEffect(() => {
+    try {
+      localStorage.setItem(KEYS.mode, themeMode);
+      localStorage.setItem(KEYS.accent, accentColor);
+      localStorage.setItem(KEYS.fontSize, fontSize);
+      localStorage.setItem(KEYS.compact, String(compactSidebar));
+      localStorage.setItem(KEYS.motion, String(reducedMotion));
+      localStorage.setItem(KEYS.contrast, String(highContrast));
+    } catch (err) {
+      console.warn("Could not persist appearance settings:", err?.name || err);
     }
   }, [themeMode, accentColor, fontSize, compactSidebar, reducedMotion, highContrast]);
 
-  const updateProfile = (newProfile) => {
+  /* Apply to the document root. */
+  useEffect(() => {
+    const root = document.documentElement;
+
+    // "system" stamps nothing, so the prefers-color-scheme block in the
+    // stylesheet can take over.
+    if (themeMode === "system") {
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", themeMode);
+    }
+
+    const palette = ACCENT_COLORS[accentColor] || ACCENT_COLORS.indigo;
+    const dark = DARK_ACCENTS[accentColor] || DARK_ACCENTS.indigo;
+    const active = resolvedMode === "dark" ? { ...palette, ...dark } : palette;
+
+    root.style.setProperty("--primary-accent", active.primary);
+    root.style.setProperty("--primary-hover", active.hover);
+    root.style.setProperty("--primary-light", active.light);
+    root.style.setProperty("--primary-ring", active.ring);
+    root.style.setProperty(
+      "--primary-bg-subtle",
+      `color-mix(in srgb, ${active.primary} 12%, transparent)`
+    );
+
+    root.style.setProperty("--base-font-size", FONT_SIZES[fontSize] || FONT_SIZES.medium);
+    root.style.setProperty(
+      "--sidebar-w",
+      compactSidebar ? "var(--sidebar-w-compact)" : "260px"
+    );
+
+    root.classList.toggle("high-contrast", highContrast);
+    root.classList.toggle("reduced-motion", reducedMotion);
+    root.classList.toggle("sidebar-compact", compactSidebar);
+  }, [
+    themeMode,
+    resolvedMode,
+    accentColor,
+    fontSize,
+    compactSidebar,
+    reducedMotion,
+    highContrast,
+  ]);
+
+  /**
+   * Merge into the stored profile.
+   *
+   * The write happens here, not inside the state updater — updater functions
+   * must be pure, and StrictMode double-invokes them in development.
+   */
+  const updateProfile = useCallback((patch) => {
     setUserProfile((prev) => {
-      const updated = { ...prev, ...newProfile };
-      localStorage.setItem("smartassess_user_profile", JSON.stringify(updated));
-      return updated;
+      const next = { ...prev, ...patch };
+      queueMicrotask(() => {
+        if (!safeSet(KEYS.profile, next)) {
+          console.warn(
+            "Profile not saved — local storage is full. A large avatar image is the usual cause."
+          );
+        }
+      });
+      return next;
     });
-  };
+  }, []);
 
-  return (
-    <ThemeContext.Provider
-      value={{
-        themeMode,
-        setThemeMode,
-        accentColor,
-        setAccentColor,
-        fontSize,
-        setFontSize,
-        compactSidebar,
-        setCompactSidebar,
-        reducedMotion,
-        setReducedMotion,
-        highContrast,
-        setHighContrast,
-        userProfile,
-        updateProfile,
-        ACCENT_COLORS,
-      }}
-    >
-      {children}
-    </ThemeContext.Provider>
+  const resetProfile = useCallback(() => {
+    setUserProfile(DEFAULT_PROFILE);
+    queueMicrotask(() => safeSet(KEYS.profile, DEFAULT_PROFILE));
+  }, []);
+
+  const value = useMemo(
+    () => ({
+      themeMode,
+      setThemeMode,
+      resolvedMode,
+      accentColor,
+      setAccentColor,
+      fontSize,
+      setFontSize,
+      compactSidebar,
+      setCompactSidebar,
+      reducedMotion,
+      setReducedMotion,
+      highContrast,
+      setHighContrast,
+      userProfile,
+      updateProfile,
+      resetProfile,
+      ACCENT_COLORS,
+    }),
+    [
+      themeMode,
+      resolvedMode,
+      accentColor,
+      fontSize,
+      compactSidebar,
+      reducedMotion,
+      highContrast,
+      userProfile,
+      updateProfile,
+      resetProfile,
+    ]
   );
-};
 
-export const useTheme = () => {
-  const context = useContext(ThemeContext);
-  if (!context) {
-    throw new Error("useTheme must be used within a ThemeProvider");
-  }
-  return context;
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 };
 
 export default ThemeContext;

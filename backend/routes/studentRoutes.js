@@ -8,19 +8,22 @@ import {
   deleteStudent,
   studentCount,
 } from "../controllers/studentController.js";
+import { protect, authorize } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.get("/", getStudents);
+// Every roster route requires a valid session.
+router.use(protect);
 
+// Static segment must be declared before "/:id", or "count" is read as an id.
 router.get("/count", studentCount);
 
+router.get("/", getStudents);
 router.get("/:id", getStudent);
 
-router.post("/", addStudent);
-
-router.put("/:id", updateStudent);
-
-router.delete("/:id", deleteStudent);
+// Mutations are restricted to staff.
+router.post("/", authorize("faculty", "admin"), addStudent);
+router.put("/:id", authorize("faculty", "admin"), updateStudent);
+router.delete("/:id", authorize("admin"), deleteStudent);
 
 export default router;

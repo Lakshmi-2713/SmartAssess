@@ -1,466 +1,555 @@
-import React, { useState, useMemo } from "react";
+import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  FaPlus,
+  FaEdit,
+  FaEye,
+  FaTrashAlt,
+  FaTimes,
+  FaSearch,
+  FaClipboardList,
+  FaCheckCircle,
+  FaClock,
+  FaFileAlt,
+  FaUsers,
+  FaChartBar,
+  FaCopy,
+  FaToggleOn,
+  FaToggleOff,
+  FaPlay,
+  FaAward,
+  FaCalendarAlt,
+  FaShieldAlt,
+  FaExclamationTriangle,
+} from "react-icons/fa";
 import Sidebar from "../components/Sidebar";
 import Navbar from "../components/Navbar";
-import {
-  FaPlus, FaEdit, FaEye, FaTrashAlt, FaTimes, FaSearch,
-  FaFilter, FaClipboardList, FaCheckCircle, FaClock,
-  FaFileAlt, FaUsers, FaChartBar, FaCalendarAlt,
-  FaBolt, FaDownload, FaCopy, FaToggleOn, FaToggleOff,
-  FaPlay,
-} from "react-icons/fa";
-import { useNavigate } from "react-router-dom";
-import { getStoredTests, saveStoredTests } from "../services/storage";
+import ToastStack from "../components/ToastStack";
+import { useToasts } from "../hooks/useToasts";
+import { getUser } from "../services/session";
+import { getStoredTests, saveStoredTests, nextId } from "../services/storage";
 import "../styles/testDashboard.css";
 
-const STATUS_CONFIG = {
-  Published: { color: "#10b981", bg: "rgba(16,185,129,0.12)", border: "rgba(16,185,129,0.28)", icon: <FaCheckCircle /> },
-  Upcoming:  { color: "#38bdf8", bg: "rgba(56,189,248,0.12)", border: "rgba(56,189,248,0.28)", icon: <FaClock /> },
-  Draft:     { color: "#94a3b8", bg: "rgba(148,163,184,0.12)", border: "rgba(148,163,184,0.28)", icon: <FaFileAlt /> },
+const STATUS_META = {
+  Published: { badge: "badge-success", icon: <FaCheckCircle /> },
+  Upcoming: { badge: "badge-info", icon: <FaClock /> },
+  Draft: { badge: "badge-neutral", icon: <FaFileAlt /> },
 };
 
-const TABS = [
-  { label: "All Tests", icon: <FaClipboardList /> },
-  { label: "Published", icon: <FaCheckCircle /> },
-  { label: "Upcoming",  icon: <FaClock /> },
-  { label: "Draft",     icon: <FaFileAlt /> },
-];
-
+const TABS = ["All", "Published", "Upcoming", "Draft"];
 const SUBJECTS = ["Java", "DSA", "Web Dev", "DBMS", "OS", "CN", "Python", "AI/ML", "Cloud"];
 
-function TestDashboard() {
+const EMPTY_FORM = {
+  title: "",
+  subject: "Java",
+  duration: "60",
+  marks: "100",
+  date: "",
+  status: "Upcoming",
+  proctored: true,
+  description: "",
+};
+
+function validate(form) {
+  const errors = {};
+  if (!form.title.trim()) errors.title = "Title is required.";
+  const d = Number(form.duration);
+  if (!Number.isFinite(d) || d < 1 || d > 600) errors.duration = "Duration must be 1–600 minutes.";
+  const m = Number(form.marks);
+  if (!Number.isFinite(m) || m < 1 || m > 1000) errors.marks = "Total marks must be 1–1000.";
+  return errors;
+}
+
+export default function TestDashboard() {
   const navigate = useNavigate();
+  const toasts = useToasts();
+  const user = getUser() || {};
+  const isStaff = user.role === "faculty" || user.role === "admin";
+
   const [mobileOpen, setMobileOpen] = useState(false);
   const [tests, setTests] = useState(() => getStoredTests());
-  const [activeTab, setActiveTab] = useState("All Tests");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
-  const [showView, setShowView]     = useState(null);  // test object
-  const [showEdit, setShowEdit]     = useState(null);  // test object
+  const [tab, setTab] = useState("All");
+  const [query, setQuery] = useState("");
 
-  // Create form state
-  const [form, setForm] = useState({
-    title: "", subject: "Java", duration: "60", marks: "100",
-    date: "", status: "Upcoming", proctored: true, description: "",
-  });
+  const [modal, setModal] = useState(null); // "create" | "edit" | "view" | "delete"
+  const [current, setCurrent] = useState(null);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [errors, setErrors] = useState({});
 
-  // Edit form state mirrors form
-  const [editForm, setEditForm] = useState({});
+  const persist = (next) => {
+    setTests(next);
+    if (!saveStoredTests(next)) {
+      toasts.error("Changes could not be saved — local storage is full.");
+    }
+  };
 
-  const counts = useMemo(() => ({
-    all: tests.length,
-    published: tests.filter((t) => t.status === "Published").length,
-    upcoming: tests.filter((t) => t.status === "Upcoming").length,
-    draft: tests.filter((t) => t.status === "Draft").length,
-  }), [tests]);
+  const counts = useMemo(
+    () => ({
+      All: tests.length,
+      Published: tests.filter((t) => t.status === "Published").length,
+      Upcoming: tests.filter((t) => t.status === "Upcoming").length,
+      Draft: tests.filter((t) => t.status === "Draft").length,
+    }),
+    [tests]
+  );
 
   const filtered = useMemo(() => {
-    let list = tests;
-    if (activeTab !== "All Tests") list = list.filter((t) => t.status === activeTab);
-    if (searchQuery.trim())
-      list = list.filter(
-        (t) =>
-          t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          t.subject.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-    return list;
-  }, [tests, activeTab, searchQuery]);
+    const q = query.trim().toLowerCase();
+    return tests.filter((t) => {
+      const matchTab = tab === "All" || t.status === tab;
+      const matchQuery =
+        !q ||
+        String(t.title || "").toLowerCase().includes(q) ||
+        String(t.subject || "").toLowerCase().includes(q);
+      return matchTab && matchQuery;
+    });
+  }, [tests, tab, query]);
 
-  /* ── Handlers ─────────────────────────────────────────── */
+  const totals = useMemo(() => {
+    const students = tests.reduce((a, t) => a + (Number(t.students) || 0), 0);
+    const attempts = tests.reduce((a, t) => a + (Number(t.attempts) || 0), 0);
+    return {
+      students,
+      attempts,
+      completion: students > 0 ? Math.round((attempts / students) * 100) : 0,
+    };
+  }, [tests]);
+
+  const setField = (e) => {
+    const { name, value, type, checked } = e.target;
+    setForm((prev) => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
+    setErrors((prev) => (prev[name] ? { ...prev, [name]: undefined } : prev));
+  };
+
+  const closeModal = () => {
+    setModal(null);
+    setCurrent(null);
+    setErrors({});
+  };
+
+  const openCreate = () => {
+    setForm(EMPTY_FORM);
+    setErrors({});
+    setModal("create");
+  };
+
+  const openEdit = (t) => {
+    setCurrent(t);
+    setForm({
+      title: t.title || "",
+      subject: t.subject || "Java",
+      duration: String(t.duration ?? 60),
+      marks: String(t.marks ?? 100),
+      date: t.date || "",
+      status: t.status || "Upcoming",
+      proctored: Boolean(t.proctored),
+      description: t.description || "",
+    });
+    setErrors({});
+    setModal("edit");
+  };
+
   const handleCreate = (e) => {
     e.preventDefault();
-    if (!form.title || !form.subject) return;
+    const found = validate(form);
+    if (Object.keys(found).length) return setErrors(found);
+
     const entry = {
-      id: Date.now(),
-      title: form.title,
+      // nextId() is monotonic — Date.now() collided when two tests were
+      // created inside the same millisecond.
+      id: nextId(),
+      title: form.title.trim(),
       subject: form.subject,
-      date: form.date || "30 May 2025",
-      duration: parseInt(form.duration) || 60,
-      marks: parseInt(form.marks) || 100,
+      date: form.date || new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+      duration: Number(form.duration),
+      marks: Number(form.marks),
       status: form.status,
       students: 0,
       attempts: 0,
       proctored: form.proctored,
-      description: form.description,
+      description: form.description.trim(),
     };
-    const updated = [entry, ...tests];
-    setTests(updated);
-    saveStoredTests(updated);
-    setShowCreate(false);
-    setForm({ title: "", subject: "Java", duration: "60", marks: "100", date: "", status: "Upcoming", proctored: true, description: "" });
-  };
 
-  const handleDelete = (id) => {
-    if (window.confirm("Are you sure you want to delete this assessment?")) {
-      const updated = tests.filter((t) => t.id !== id);
-      setTests(updated);
-      saveStoredTests(updated);
-    }
-  };
-
-  const handleDuplicate = (t) => {
-    const copy = { ...t, id: Date.now(), title: `${t.title} (Copy)`, status: "Draft", attempts: 0 };
-    const updated = [copy, ...tests];
-    setTests(updated);
-    saveStoredTests(updated);
-  };
-
-  const handleToggleStatus = (id) => {
-    const updated = tests.map((t) => {
-      if (t.id !== id) return t;
-      const next = t.status === "Published" ? "Upcoming" : t.status === "Upcoming" ? "Published" : "Published";
-      return { ...t, status: next };
-    });
-    setTests(updated);
-    saveStoredTests(updated);
-  };
-
-  const handleEditOpen = (t) => {
-    setEditForm({ ...t, duration: String(t.duration), marks: String(t.marks) });
-    setShowEdit(t);
+    persist([entry, ...tests]);
+    toasts.success(`“${entry.title}” created.`);
+    closeModal();
   };
 
   const handleEditSave = (e) => {
     e.preventDefault();
-    const updated = tests.map((t) =>
-      t.id === showEdit.id
-        ? { ...t, ...editForm, duration: parseInt(editForm.duration) || 60, marks: parseInt(editForm.marks) || 100 }
-        : t
+    if (!current) return;
+    const found = validate(form);
+    if (Object.keys(found).length) return setErrors(found);
+
+    persist(
+      tests.map((t) =>
+        t.id === current.id
+          ? {
+              ...t,
+              title: form.title.trim(),
+              subject: form.subject,
+              date: form.date || t.date,
+              duration: Number(form.duration),
+              marks: Number(form.marks),
+              status: form.status,
+              proctored: form.proctored,
+              description: form.description.trim(),
+            }
+          : t
+      )
     );
-    setTests(updated);
-    saveStoredTests(updated);
-    setShowEdit(null);
+    toasts.success("Assessment updated.");
+    closeModal();
   };
 
-  const handleStartTest = (test) => {
-    localStorage.setItem("smartassess_active_test", JSON.stringify(test));
-    navigate(`/take-test?testId=${test.id}`);
+  const handleDelete = () => {
+    if (!current) return;
+    persist(tests.filter((t) => t.id !== current.id));
+    toasts.success(`“${current.title}” deleted.`);
+    closeModal();
   };
 
-  /* ── Summary Stats ────────────────────────────────────── */
-  const totalStudents = tests.reduce((a, t) => a + t.students, 0);
-  const totalAttempts = tests.reduce((a, t) => a + t.attempts, 0);
-  const avgCompletion = totalStudents > 0 ? Math.round((totalAttempts / totalStudents) * 100) : 0;
+  const handleDuplicate = (t) => {
+    const copy = {
+      ...t,
+      id: nextId(),
+      title: `${t.title} (copy)`,
+      status: "Draft",
+      attempts: 0,
+      students: 0,
+    };
+    persist([copy, ...tests]);
+    toasts.info(`Duplicated as a draft.`);
+  };
+
+  const handleToggleStatus = (id) => {
+    persist(
+      tests.map((t) =>
+        t.id === id
+          ? { ...t, status: t.status === "Published" ? "Upcoming" : "Published" }
+          : t
+      )
+    );
+  };
+
+  const startTest = (t) => navigate(`/take-test?testId=${t.id}`);
 
   return (
-    <div className="test-mgmt-layout">
+    <div className="app-shell">
       <Sidebar mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      <ToastStack toasts={toasts.toasts} onDismiss={toasts.dismiss} />
 
-      <main className="test-mgmt-main">
+      <div className="app-main">
         <Navbar
           title="Test Management"
-          subtitle="Create, manage and schedule assessments"
+          subtitle="Create, schedule and publish assessments"
           onToggleMobileSidebar={() => setMobileOpen(true)}
         />
 
-        <div className="test-mgmt-body">
-          {/* ── Page Header ─────────────────────────────── */}
-          <div className="tm-page-header">
-            <div className="tm-page-header-left">
-              <div className="tm-header-icon-box">
-                <FaClipboardList />
-              </div>
+        <div className="app-body">
+          <div className="page-head">
+            <div className="page-head-title">
+              <span className="page-head-icon"><FaClipboardList /></span>
               <div>
-                <h2 className="tm-page-title">Test Management</h2>
-                <p className="tm-page-sub">Create, manage and schedule assessments</p>
+                <h2 className="page-title">Assessments</h2>
+                <p className="page-subtitle">{tests.length} tests in the catalogue</p>
               </div>
             </div>
-            <button className="tm-create-btn" onClick={() => setShowCreate(true)}>
-              <FaPlus /> Create Test
-            </button>
+            {isStaff && (
+              <div className="page-head-actions">
+                <button className="btn btn-primary" onClick={openCreate}>
+                  <FaPlus /> Create test
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* ── Summary Cards ───────────────────────────── */}
-          <div className="tm-summary-grid">
-            <div className="tm-summary-card tsc-all">
-              <div className="tsc-icon"><FaClipboardList /></div>
-              <div className="tsc-content">
-                <span className="tsc-value">{counts.all}</span>
-                <span className="tsc-label">Total Tests</span>
-              </div>
-            </div>
-            <div className="tm-summary-card tsc-published">
-              <div className="tsc-icon"><FaCheckCircle /></div>
-              <div className="tsc-content">
-                <span className="tsc-value">{counts.published}</span>
-                <span className="tsc-label">Published</span>
-              </div>
-            </div>
-            <div className="tm-summary-card tsc-upcoming">
-              <div className="tsc-icon"><FaClock /></div>
-              <div className="tsc-content">
-                <span className="tsc-value">{counts.upcoming}</span>
-                <span className="tsc-label">Upcoming</span>
-              </div>
-            </div>
-            <div className="tm-summary-card tsc-students">
-              <div className="tsc-icon"><FaUsers /></div>
-              <div className="tsc-content">
-                <span className="tsc-value">{totalStudents}</span>
-                <span className="tsc-label">Enrolled</span>
-              </div>
-            </div>
-            <div className="tm-summary-card tsc-completion">
-              <div className="tsc-icon"><FaChartBar /></div>
-              <div className="tsc-content">
-                <span className="tsc-value">{avgCompletion}%</span>
-                <span className="tsc-label">Completion</span>
-              </div>
-            </div>
+          <div className="stat-grid">
+            <Tile tone="tile-primary" icon={<FaClipboardList />} value={counts.All} label="Total tests" />
+            <Tile tone="tile-green" icon={<FaCheckCircle />} value={counts.Published} label="Published" />
+            <Tile tone="tile-blue" icon={<FaClock />} value={counts.Upcoming} label="Upcoming" />
+            <Tile tone="tile-indigo" icon={<FaUsers />} value={totals.students} label="Enrolments" />
+            <Tile tone="tile-amber" icon={<FaChartBar />} value={`${totals.completion}%`} label="Completion" />
           </div>
 
-          {/* ── Filters Bar ─────────────────────────────── */}
-          <div className="tm-filters-bar">
-            <div className="tm-tabs-row">
-              {TABS.map(({ label, icon }) => (
+          <div className="toolbar">
+            <div className="tabs">
+              {TABS.map((t) => (
                 <button
-                  key={label}
-                  className={`tm-tab-btn ${activeTab === label ? "active" : ""}`}
-                  onClick={() => setActiveTab(label)}
+                  key={t}
+                  className={`tab ${tab === t ? "is-active" : ""}`}
+                  onClick={() => setTab(t)}
                 >
-                  {icon}
-                  <span>{label}</span>
-                  <span className="tm-tab-count">
-                    {label === "All Tests" ? counts.all
-                      : label === "Published" ? counts.published
-                      : label === "Upcoming"  ? counts.upcoming
-                      : counts.draft}
-                  </span>
+                  {t} <span className="tab-count">{counts[t]}</span>
                 </button>
               ))}
             </div>
-            <div className="tm-search-box">
-              <FaSearch className="tm-search-icon" />
-              <input
-                type="text"
-                placeholder="Search tests…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {searchQuery && (
-                <button className="tm-search-clear" onClick={() => setSearchQuery("")}>
+
+            <div className="toolbar-search">
+              <div className="input-wrap">
+                <FaSearch />
+                <input
+                  className="input"
+                  type="search"
+                  placeholder="Search tests…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  aria-label="Search tests"
+                />
+              </div>
+            </div>
+          </div>
+
+          {filtered.length === 0 ? (
+            <div className="card">
+              <div className="empty-state">
+                <span className="empty-icon"><FaClipboardList /></span>
+                <p className="empty-title">No assessments found</p>
+                <p className="empty-text">
+                  {tests.length === 0
+                    ? "Create your first assessment to get started."
+                    : "Try a different search term or tab."}
+                </p>
+                {isStaff && tests.length === 0 && (
+                  <button className="btn btn-primary" onClick={openCreate}>
+                    <FaPlus /> Create test
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="test-grid">
+              {filtered.map((t) => {
+                const meta = STATUS_META[t.status] || STATUS_META.Draft;
+                const completion =
+                  t.students > 0 ? Math.round((t.attempts / t.students) * 100) : 0;
+
+                return (
+                  <article key={t.id} className="test-card card-interactive">
+                    <header className="test-card-head">
+                      <span className={`badge ${meta.badge}`}>
+                        {meta.icon} {t.status}
+                      </span>
+                      {t.proctored && (
+                        <span className="badge badge-primary">
+                          <FaShieldAlt /> Proctored
+                        </span>
+                      )}
+                    </header>
+
+                    <h3 className="test-card-title">{t.title}</h3>
+                    {t.description && <p className="test-card-desc">{t.description}</p>}
+
+                    <dl className="test-card-meta">
+                      <div><dt>Subject</dt><dd>{t.subject}</dd></div>
+                      <div><dt>Duration</dt><dd>{t.duration} min</dd></div>
+                      <div><dt>Marks</dt><dd>{t.marks}</dd></div>
+                      <div><dt>Date</dt><dd>{t.date}</dd></div>
+                    </dl>
+
+                    <div className="test-card-progress">
+                      <div className="row-between text-xs">
+                        <span className="text-muted">
+                          {t.attempts} of {t.students} attempted
+                        </span>
+                        <span className="tabular">{completion}%</span>
+                      </div>
+                      <div className="progress-track">
+                        <div className="progress-fill" style={{ width: `${completion}%` }} />
+                      </div>
+                    </div>
+
+                    <footer className="test-card-foot">
+                      <button
+                        className="btn btn-primary btn-sm grow"
+                        onClick={() => startTest(t)}
+                        disabled={t.status === "Draft"}
+                        title={t.status === "Draft" ? "Publish this test first" : "Launch"}
+                      >
+                        <FaPlay /> Launch
+                      </button>
+
+                      <button
+                        className="btn btn-icon"
+                        onClick={() => { setCurrent(t); setModal("view"); }}
+                        title="Details"
+                        aria-label={`Details for ${t.title}`}
+                      >
+                        <FaEye />
+                      </button>
+
+                      {isStaff && (
+                        <>
+                          <button
+                            className="btn btn-icon"
+                            onClick={() => handleToggleStatus(t.id)}
+                            title={t.status === "Published" ? "Unpublish" : "Publish"}
+                            aria-label={t.status === "Published" ? "Unpublish" : "Publish"}
+                          >
+                            {t.status === "Published" ? <FaToggleOn /> : <FaToggleOff />}
+                          </button>
+                          <button
+                            className="btn btn-icon"
+                            onClick={() => handleDuplicate(t)}
+                            title="Duplicate"
+                            aria-label={`Duplicate ${t.title}`}
+                          >
+                            <FaCopy />
+                          </button>
+                          <button
+                            className="btn btn-icon"
+                            onClick={() => openEdit(t)}
+                            title="Edit"
+                            aria-label={`Edit ${t.title}`}
+                          >
+                            <FaEdit />
+                          </button>
+                          <button
+                            className="btn btn-icon btn-icon-danger"
+                            onClick={() => { setCurrent(t); setModal("delete"); }}
+                            title="Delete"
+                            aria-label={`Delete ${t.title}`}
+                          >
+                            <FaTrashAlt />
+                          </button>
+                        </>
+                      )}
+                    </footer>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Create / edit */}
+      {(modal === "create" || modal === "edit") && (
+        <div className="modal-backdrop" onClick={closeModal} role="presentation">
+          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <form onSubmit={modal === "create" ? handleCreate : handleEditSave} noValidate>
+              <div className="modal-head">
+                <div className="modal-head-left">
+                  <span className="modal-head-icon">{modal === "create" ? <FaPlus /> : <FaEdit />}</span>
+                  <div>
+                    <h3 className="modal-title">
+                      {modal === "create" ? "Create assessment" : "Edit assessment"}
+                    </h3>
+                    <p className="modal-sub">
+                      {modal === "create" ? "Set up a new test paper." : current?.title}
+                    </p>
+                  </div>
+                </div>
+                <button type="button" className="modal-close" onClick={closeModal} aria-label="Close">
                   <FaTimes />
                 </button>
-              )}
-            </div>
-          </div>
+              </div>
 
-          {/* ── Test Cards Grid (mobile) / Table (desktop) ── */}
-          {/* Desktop Table */}
-          <div className="tm-table-wrap">
-            <table className="tm-table">
-              <thead>
-                <tr>
-                  <th>Test</th>
-                  <th>Subject</th>
-                  <th>Date</th>
-                  <th>Duration</th>
-                  <th>Marks</th>
-                  <th>Students</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="tm-empty-row">
-                      <div className="tm-empty-state">
-                        <FaFilter />
-                        <p>No tests found for "{searchQuery}"</p>
-                        <button onClick={() => setSearchQuery("")}>Clear search</button>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  filtered.map((t) => {
-                    const sc = STATUS_CONFIG[t.status] || STATUS_CONFIG.Draft;
-                    return (
-                      <tr key={t.id} className="tm-table-row">
-                        <td>
-                          <div className="tm-test-cell">
-                            <div className="tm-test-dot" style={{ background: sc.color }} />
-                            <div>
-                              <p className="tm-test-title">{t.title}</p>
-                              {t.proctored && (
-                                <span className="tm-proctored-tag"><FaBolt />Proctored</span>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                        <td><span className="tm-subject-badge">{t.subject}</span></td>
-                        <td>
-                          <span className="tm-date-cell"><FaCalendarAlt />{t.date}</span>
-                        </td>
-                        <td><span className="tm-duration-cell"><FaClock />{t.duration} min</span></td>
-                        <td><strong style={{ color: "#f1f5f9" }}>{t.marks}</strong></td>
-                        <td>
-                          <div className="tm-students-cell">
-                            <FaUsers />
-                            <span>{t.students}</span>
-                            {t.attempts > 0 && (
-                              <span className="tm-attempts-badge">{t.attempts} attempts</span>
-                            )}
-                          </div>
-                        </td>
-                        <td>
-                          <span
-                            className="tm-status-pill"
-                            style={{ color: sc.color, background: sc.bg, border: `1px solid ${sc.border}` }}
-                          >
-                            {sc.icon} {t.status}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="tm-action-row">
-                            <button className="tm-action-btn" title="Take Test (Assessment Mode)" style={{ color: "#38bdf8", borderColor: "rgba(56,189,248,0.3)" }} onClick={() => handleStartTest(t)}>
-                              <FaPlay />
-                            </button>
-                            <button className="tm-action-btn" title="View" onClick={() => setShowView(t)}>
-                              <FaEye />
-                            </button>
-                            <button className="tm-action-btn" title="Edit" onClick={() => handleEditOpen(t)}>
-                              <FaEdit />
-                            </button>
-                            <button className="tm-action-btn" title="Duplicate" onClick={() => handleDuplicate(t)}>
-                              <FaCopy />
-                            </button>
-                            <button
-                              className="tm-action-btn"
-                              title={t.status === "Published" ? "Unpublish" : "Publish"}
-                              onClick={() => handleToggleStatus(t.id)}
-                            >
-                              {t.status === "Published" ? <FaToggleOn /> : <FaToggleOff />}
-                            </button>
-                            <button className="tm-action-btn tm-delete-btn" title="Delete" onClick={() => handleDelete(t.id)}>
-                              <FaTrashAlt />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+              <div className="modal-body">
+                <div className="form-grid">
+                  <div className="field form-row-full">
+                    <label className="field-label">Title <span className="req">*</span></label>
+                    <input
+                      className={`input ${errors.title ? "has-error" : ""}`}
+                      name="title"
+                      value={form.title}
+                      onChange={setField}
+                      placeholder="e.g. Java Programming Fundamentals"
+                    />
+                    {errors.title && <span className="field-error">{errors.title}</span>}
+                  </div>
 
-          {/* Mobile Cards */}
-          <div className="tm-mobile-cards">
-            {filtered.map((t) => {
-              const sc = STATUS_CONFIG[t.status] || STATUS_CONFIG.Draft;
-              return (
-                <div key={t.id} className="tm-mobile-card">
-                  <div className="tm-mc-top">
-                    <div className="tm-mc-title-row">
-                      <div className="tm-test-dot" style={{ background: sc.color }} />
-                      <p className="tm-mc-title">{t.title}</p>
-                    </div>
-                    <span
-                      className="tm-status-pill"
-                      style={{ color: sc.color, background: sc.bg, border: `1px solid ${sc.border}` }}
-                    >
-                      {sc.icon} {t.status}
-                    </span>
+                  <div className="field">
+                    <label className="field-label">Subject</label>
+                    <select className="select" name="subject" value={form.subject} onChange={setField}>
+                      {SUBJECTS.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
                   </div>
-                  <div className="tm-mc-meta">
-                    <span><FaCalendarAlt />{t.date}</span>
-                    <span><FaClock />{t.duration} min</span>
-                    <span><FaClipboardList />{t.marks} marks</span>
-                    <span><FaUsers />{t.students} students</span>
-                  </div>
-                  <div className="tm-mc-actions">
-                    <button onClick={() => handleStartTest(t)} style={{ color: "#38bdf8", borderColor: "rgba(56,189,248,0.4)" }}><FaPlay /> Take Test</button>
-                    <button onClick={() => setShowView(t)}><FaEye /> View</button>
-                    <button onClick={() => handleEditOpen(t)}><FaEdit /> Edit</button>
-                    <button onClick={() => handleDuplicate(t)}><FaCopy /> Copy</button>
-                    <button onClick={() => handleDelete(t.id)} className="tm-mc-delete"><FaTrashAlt /></button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </main>
 
-      {/* ── CREATE TEST MODAL ───────────────────────────── */}
-      {showCreate && (
-        <div className="tm-modal-overlay" onClick={() => setShowCreate(false)}>
-          <div className="tm-modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="tm-modal-header">
-              <div className="tm-modal-title-row">
-                <div className="tm-modal-icon-box"><FaPlus /></div>
-                <div>
-                  <h3>Create New Assessment</h3>
-                  <p>Fill in the details to schedule a test</p>
+                  <div className="field">
+                    <label className="field-label">Status</label>
+                    <select className="select" name="status" value={form.status} onChange={setField}>
+                      <option value="Draft">Draft</option>
+                      <option value="Upcoming">Upcoming</option>
+                      <option value="Published">Published</option>
+                    </select>
+                  </div>
+
+                  <div className="field">
+                    <label className="field-label">Duration (minutes) <span className="req">*</span></label>
+                    <input
+                      className={`input ${errors.duration ? "has-error" : ""}`}
+                      name="duration"
+                      type="number"
+                      min="1"
+                      max="600"
+                      value={form.duration}
+                      onChange={setField}
+                    />
+                    {errors.duration && <span className="field-error">{errors.duration}</span>}
+                  </div>
+
+                  <div className="field">
+                    <label className="field-label">Total marks <span className="req">*</span></label>
+                    <input
+                      className={`input ${errors.marks ? "has-error" : ""}`}
+                      name="marks"
+                      type="number"
+                      min="1"
+                      max="1000"
+                      value={form.marks}
+                      onChange={setField}
+                    />
+                    {errors.marks && <span className="field-error">{errors.marks}</span>}
+                  </div>
+
+                  <div className="field form-row-full">
+                    <label className="field-label">Scheduled date</label>
+                    <input
+                      className="input"
+                      name="date"
+                      value={form.date}
+                      onChange={setField}
+                      placeholder="e.g. 30 May 2025"
+                    />
+                  </div>
+
+                  <div className="field form-row-full">
+                    <label className="field-label">Description</label>
+                    <textarea
+                      className="textarea"
+                      name="description"
+                      value={form.description}
+                      onChange={setField}
+                      rows="3"
+                      placeholder="What does this assessment cover?"
+                    />
+                  </div>
+
+                  <div className="field form-row-full">
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        name="proctored"
+                        checked={form.proctored}
+                        onChange={setField}
+                      />
+                      <span className="switch-track" />
+                      <span>
+                        <strong className="text-sm">AI proctoring</strong>
+                        <span className="field-hint" style={{ display: "block" }}>
+                          Requires camera access and fullscreen lockdown.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
                 </div>
               </div>
-              <button className="tm-modal-close" onClick={() => setShowCreate(false)}><FaTimes /></button>
-            </div>
-            <form onSubmit={handleCreate} className="tm-modal-form">
-              <div className="tm-form-grid">
-                <div className="tm-form-group tm-col-2">
-                  <label>Test Title *</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. AI & Machine Learning Midterm"
-                    value={form.title}
-                    onChange={(e) => setForm({ ...form, title: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="tm-form-group">
-                  <label>Subject *</label>
-                  <select value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })}>
-                    {SUBJECTS.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div className="tm-form-group">
-                  <label>Status</label>
-                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                    <option>Upcoming</option>
-                    <option>Draft</option>
-                    <option>Published</option>
-                  </select>
-                </div>
-                <div className="tm-form-group">
-                  <label>Duration (Minutes)</label>
-                  <input type="number" min="10" max="360" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} />
-                </div>
-                <div className="tm-form-group">
-                  <label>Total Marks</label>
-                  <input type="number" min="10" value={form.marks} onChange={(e) => setForm({ ...form, marks: e.target.value })} />
-                </div>
-                <div className="tm-form-group">
-                  <label>Scheduled Date</label>
-                  <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
-                </div>
-                <div className="tm-form-group tm-col-2">
-                  <label>Description</label>
-                  <textarea
-                    rows={3}
-                    placeholder="Optional exam instructions or overview…"
-                    value={form.description}
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  />
-                </div>
-                <div className="tm-form-group tm-col-2">
-                  <label className="tm-toggle-label">
-                    <span>Enable AI Proctoring</span>
-                    <button
-                      type="button"
-                      className={`tm-toggle-btn ${form.proctored ? "on" : "off"}`}
-                      onClick={() => setForm({ ...form, proctored: !form.proctored })}
-                    >
-                      <span className="tm-toggle-thumb" />
-                    </button>
-                    <span className="tm-toggle-state">{form.proctored ? "Enabled" : "Disabled"}</span>
-                  </label>
-                </div>
-              </div>
-              <div className="tm-modal-footer">
-                <button type="button" className="tm-btn-cancel" onClick={() => setShowCreate(false)}>Cancel</button>
-                <button type="submit" className="tm-btn-submit">
-                  <FaCheckCircle /> Create Assessment
+
+              <div className="modal-foot">
+                <button type="button" className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+                <button type="submit" className="btn btn-primary">
+                  {modal === "create" ? "Create test" : "Save changes"}
                 </button>
               </div>
             </form>
@@ -468,142 +557,92 @@ function TestDashboard() {
         </div>
       )}
 
-      {/* ── EDIT MODAL ──────────────────────────────────── */}
-      {showEdit && (
-        <div className="tm-modal-overlay" onClick={() => setShowEdit(null)}>
-          <div className="tm-modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="tm-modal-header">
-              <div className="tm-modal-title-row">
-                <div className="tm-modal-icon-box" style={{ background: "rgba(56,189,248,0.15)", color: "#38bdf8" }}><FaEdit /></div>
+      {/* View */}
+      {modal === "view" && current && (
+        <div className="modal-backdrop" onClick={closeModal} role="presentation">
+          <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="modal-head">
+              <div className="modal-head-left">
+                <span className="modal-head-icon"><FaClipboardList /></span>
                 <div>
-                  <h3>Edit Assessment</h3>
-                  <p>{showEdit.title}</p>
+                  <h3 className="modal-title">{current.title}</h3>
+                  <p className="modal-sub">{current.subject}</p>
                 </div>
               </div>
-              <button className="tm-modal-close" onClick={() => setShowEdit(null)}><FaTimes /></button>
+              <button className="modal-close" onClick={closeModal} aria-label="Close"><FaTimes /></button>
             </div>
-            <form onSubmit={handleEditSave} className="tm-modal-form">
-              <div className="tm-form-grid">
-                <div className="tm-form-group tm-col-2">
-                  <label>Test Title</label>
-                  <input type="text" value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} required />
-                </div>
-                <div className="tm-form-group">
-                  <label>Subject</label>
-                  <select value={editForm.subject} onChange={(e) => setEditForm({ ...editForm, subject: e.target.value })}>
-                    {SUBJECTS.map((s) => <option key={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div className="tm-form-group">
-                  <label>Status</label>
-                  <select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
-                    <option>Upcoming</option>
-                    <option>Draft</option>
-                    <option>Published</option>
-                  </select>
-                </div>
-                <div className="tm-form-group">
-                  <label>Duration (min)</label>
-                  <input type="number" value={editForm.duration} onChange={(e) => setEditForm({ ...editForm, duration: e.target.value })} />
-                </div>
-                <div className="tm-form-group">
-                  <label>Total Marks</label>
-                  <input type="number" value={editForm.marks} onChange={(e) => setEditForm({ ...editForm, marks: e.target.value })} />
-                </div>
-              </div>
-              <div className="tm-modal-footer">
-                <button type="button" className="tm-btn-cancel" onClick={() => setShowEdit(null)}>Cancel</button>
-                <button type="submit" className="tm-btn-submit"><FaCheckCircle /> Save Changes</button>
-              </div>
-            </form>
+            <div className="modal-body">
+              {current.description && <p className="text-muted" style={{ marginBottom: "var(--sp-4)" }}>{current.description}</p>}
+              <dl className="detail-list">
+                <Row icon={<FaCheckCircle />} label="Status" value={current.status} />
+                <Row icon={<FaClock />} label="Duration" value={`${current.duration} minutes`} />
+                <Row icon={<FaAward />} label="Total marks" value={current.marks} />
+                <Row icon={<FaCalendarAlt />} label="Scheduled" value={current.date} />
+                <Row icon={<FaUsers />} label="Enrolled" value={current.students} />
+                <Row icon={<FaChartBar />} label="Attempts" value={current.attempts} />
+                <Row icon={<FaShieldAlt />} label="Proctoring" value={current.proctored ? "Enabled" : "Disabled"} />
+              </dl>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-secondary" onClick={closeModal}>Close</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => startTest(current)}
+                disabled={current.status === "Draft"}
+              >
+                <FaPlay /> Launch
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ── VIEW MODAL ──────────────────────────────────── */}
-      {showView && (() => {
-        const sc = STATUS_CONFIG[showView.status] || STATUS_CONFIG.Draft;
-        const completion = showView.students > 0 ? Math.round((showView.attempts / showView.students) * 100) : 0;
-        return (
-          <div className="tm-modal-overlay" onClick={() => setShowView(null)}>
-            <div className="tm-modal-card tm-view-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="tm-modal-header">
-                <div className="tm-modal-title-row">
-                  <div
-                    className="tm-modal-icon-box"
-                    style={{ background: sc.bg, color: sc.color, border: `1px solid ${sc.border}` }}
-                  >
-                    <FaEye />
-                  </div>
-                  <div>
-                    <h3>{showView.title}</h3>
-                    <p>{showView.subject} · {showView.date}</p>
-                  </div>
+      {/* Delete */}
+      {modal === "delete" && current && (
+        <div className="modal-backdrop" onClick={closeModal} role="presentation">
+          <div className="modal modal-sm" onClick={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
+            <div className="modal-head">
+              <div className="modal-head-left">
+                <span className="modal-head-icon is-danger"><FaExclamationTriangle /></span>
+                <div>
+                  <h3 className="modal-title">Delete assessment?</h3>
+                  <p className="modal-sub">This cannot be undone.</p>
                 </div>
-                <button className="tm-modal-close" onClick={() => setShowView(null)}><FaTimes /></button>
-              </div>
-              <div className="tm-view-body">
-                <div className="tm-view-stat-grid">
-                  <div className="tm-view-stat">
-                    <span className="tvs-label">Duration</span>
-                    <span className="tvs-value">{showView.duration} min</span>
-                  </div>
-                  <div className="tm-view-stat">
-                    <span className="tvs-label">Total Marks</span>
-                    <span className="tvs-value">{showView.marks}</span>
-                  </div>
-                  <div className="tm-view-stat">
-                    <span className="tvs-label">Enrolled</span>
-                    <span className="tvs-value">{showView.students}</span>
-                  </div>
-                  <div className="tm-view-stat">
-                    <span className="tvs-label">Attempts</span>
-                    <span className="tvs-value">{showView.attempts}</span>
-                  </div>
-                  <div className="tm-view-stat">
-                    <span className="tvs-label">Completion</span>
-                    <span className="tvs-value" style={{ color: sc.color }}>{completion}%</span>
-                  </div>
-                  <div className="tm-view-stat">
-                    <span className="tvs-label">Status</span>
-                    <span className="tm-status-pill" style={{ color: sc.color, background: sc.bg }}>
-                      {sc.icon} {showView.status}
-                    </span>
-                  </div>
-                </div>
-                {showView.description && (
-                  <div className="tm-view-desc">
-                    <p className="tvd-label">Description</p>
-                    <p className="tvd-text">{showView.description}</p>
-                  </div>
-                )}
-                {showView.proctored && (
-                  <div className="tm-proctored-notice">
-                    <FaBolt /> AI Proctoring is enabled for this test
-                  </div>
-                )}
-                <div className="tm-view-progress">
-                  <div className="tvp-header">
-                    <span>Completion Progress</span>
-                    <span>{completion}%</span>
-                  </div>
-                  <div className="tvp-bar-bg">
-                    <div className="tvp-bar-fill" style={{ width: `${completion}%`, background: sc.color }} />
-                  </div>
-                </div>
-              </div>
-              <div className="tm-modal-footer">
-                <button className="tm-btn-cancel" onClick={() => setShowView(null)}>Close</button>
-                <button className="tm-btn-submit" onClick={() => { setShowView(null); handleEditOpen(showView); }}>
-                  <FaEdit /> Edit Test
-                </button>
               </div>
             </div>
+            <div className="modal-body">
+              <p className="text-muted">
+                <strong>{current.title}</strong> will be removed from the catalogue.
+              </p>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-danger" onClick={handleDelete}>Delete</button>
+            </div>
           </div>
-        );
-      })()}
+        </div>
+      )}
     </div>
   );
 }
 
-export default TestDashboard;
+function Tile({ tone, icon, value, label }) {
+  return (
+    <div className={`stat-tile ${tone}`}>
+      <span className="stat-tile-icon">{icon}</span>
+      <div className="stat-tile-body">
+        <span className="stat-value">{value}</span>
+        <span className="stat-label">{label}</span>
+      </div>
+    </div>
+  );
+}
+
+function Row({ icon, label, value }) {
+  return (
+    <div className="detail-row">
+      <dt><span className="detail-icon">{icon}</span>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
