@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   FaTimes,
   FaCheckCircle,
@@ -7,172 +7,248 @@ import {
   FaAward,
   FaCommentDots,
   FaPaperPlane,
+  FaExclamationTriangle,
+  FaUndo,
 } from "react-icons/fa";
 import "../styles/gradeModal.css";
 
-function GradeSubmissionModal({ submission, onClose, onSaveGrade }) {
+const FALLBACK_MAX = 20;
+
+/**
+ * Faculty grading sheet for one submission.
+ *
+ * NOTE: every hook runs before any early return — the previous version bailed
+ * out on a null `submission` *above* its useState calls, which is a hooks-order
+ * violation waiting to fire the moment a caller drops its render guard.
+ */
+export default function GradeSubmissionModal({ submission, onClose, onSaveGrade }) {
+  const questions = useMemo(() => submission?.questions ?? [], [submission]);
+
+  const [marks, setMarks] = useState(() =>
+    questions.map((q) =>
+      // `??` not `||`: a legitimate score of 0 is falsy and used to be
+      // silently replaced with full marks.
+      String(q.scoreGiven ?? (q.isCorrect ? q.maxMarks ?? FALLBACK_MAX : 0))
+    )
+  );
+  const [feedback, setFeedback] = useState(submission?.feedback ?? "");
+  const [saving, setSaving] = useState(false);
+
+  const totalPossible = useMemo(
+    () => questions.reduce((acc, q) => acc + (q.maxMarks ?? FALLBACK_MAX), 0),
+    [questions]
+  );
+
+  const parsedMarks = useMemo(
+    () => marks.map((m) => (m === "" ? 0 : Number(m))),
+    [marks]
+  );
+
+  const hasInvalid = parsedMarks.some((n) => !Number.isFinite(n));
+  const calculatedTotal = hasInvalid
+    ? 0
+    : parsedMarks.reduce((acc, n) => acc + n, 0);
+
+  const percent = totalPossible > 0 ? Math.round((calculatedTotal / totalPossible) * 100) : 0;
+
   if (!submission) return null;
 
-  const [marks, setMarks] = useState(
-    submission.questions ? submission.questions.map((q) => q.scoreGiven || q.maxMarks) : [20, 20, 20, 15, 10]
-  );
-  const [feedback, setFeedback] = useState(
-    submission.feedback || "Good conceptual clarity. Work on time complexity edge cases."
-  );
-  const [isSaved, setIsSaved] = useState(false);
+  const handleMarkChange = (index, raw) => {
+    // Clamp against THIS question's max, not a hardcoded 20.
+    const max = questions[index]?.maxMarks ?? FALLBACK_MAX;
+    if (raw === "") {
+      setMarks((prev) => prev.map((m, i) => (i === index ? "" : m)));
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return; // reject "e", "+", etc. from number inputs
+    const clamped = Math.max(0, Math.min(max, n));
+    setMarks((prev) => prev.map((m, i) => (i === index ? String(clamped) : m)));
+  };
 
-  const totalPossible = submission.questions
-    ? submission.questions.reduce((acc, q) => acc + (q.maxMarks || 20), 0)
-    : 100;
-
-  const calculatedTotal = marks.reduce((acc, m) => acc + Number(m || 0), 0);
-
-  const handleMarkChange = (index, value) => {
-    const val = Math.max(0, Math.min(20, Number(value)));
-    const updated = [...marks];
-    updated[index] = val;
-    setMarks(updated);
+  const resetToAuto = () => {
+    setMarks(
+      questions.map((q) => String(q.isCorrect ? q.maxMarks ?? FALLBACK_MAX : 0))
+    );
   };
 
   const handleSave = (e) => {
     e.preventDefault();
-    setIsSaved(true);
-    if (onSaveGrade) {
-      onSaveGrade({
-        ...submission,
-        totalScore: calculatedTotal,
-        feedback,
-        status: "Graded & Published",
-      });
-    }
-    setTimeout(() => {
-      onClose();
-    }, 1500);
+    if (hasInvalid || saving) return;
+
+    setSaving(true);
+
+    // Per-question edits are written back into `questions`. They used to be
+    // discarded — only the total was saved, so the breakdown silently reverted.
+    const gradedQuestions = questions.map((q, i) => ({
+      ...q,
+      scoreGiven: parsedMarks[i],
+      maxMarks: q.maxMarks ?? FALLBACK_MAX,
+    }));
+
+    onSaveGrade?.({
+      ...submission,
+      questions: gradedQuestions,
+      totalScore: calculatedTotal,
+      maxScore: totalPossible,
+      feedback,
+      status: "Graded & Published",
+    });
+
+    onClose?.();
   };
 
-  const questionsList = submission.questions || [
-    { id: 1, text: "Which data structure uses LIFO (Last In First Out) ordering?", studentAns: "Stack", correctAns: "Stack", isCorrect: true, maxMarks: 20 },
-    { id: 2, text: "What is the worst-case time complexity of Quick Sort?", studentAns: "O(n²)", correctAns: "O(n²)", isCorrect: true, maxMarks: 20 },
-    { id: 3, text: "Which traversal visits the root node first?", studentAns: "Pre-order", correctAns: "Pre-order", isCorrect: true, maxMarks: 20 },
-    { id: 4, text: "What does SQL stand for?", studentAns: "Simple Question Language", correctAns: "Structured Query Language", isCorrect: false, maxMarks: 20 },
-    { id: 5, text: "Which of the following is NOT a JavaScript data type?", studentAns: "float", correctAns: "float", isCorrect: true, maxMarks: 20 },
-  ];
-
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="grade-modal-card" onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div className="grade-modal-header">
-          <div className="grade-header-info">
-            <div className="grade-header-icon">
-              <FaAward />
-            </div>
-            <div>
-              <h3>Test Evaluation &amp; Correction</h3>
-              <p>Student: <strong>{submission.studentName || "Rahul Verma"}</strong> • Test: <strong>{submission.testTitle || "Data Structures Midterm"}</strong></p>
-            </div>
-          </div>
-          <button className="modal-close" onClick={onClose}>
-            <FaTimes />
-          </button>
-        </div>
-
-        {/* Saved Alert Banner */}
-        {isSaved && (
-          <div className="grade-success-alert">
-            <FaCheckCircle /> Grade &amp; Feedback Published Successfully!
-          </div>
-        )}
-
-        {/* Student Meta Summary Bar */}
-        <div className="student-eval-summary-bar">
-          <div className="eval-meta-item">
-            <span>Student Email</span>
-            <strong>{submission.studentEmail || "rahul.verma@student.com"}</strong>
-          </div>
-          <div className="eval-meta-item">
-            <span>Submitted At</span>
-            <strong>{submission.date || "19 May 2025, 11:30 AM"}</strong>
-          </div>
-          <div className="eval-meta-item">
-            <span>Proctoring Status</span>
-            <strong className="status-ok"><FaShieldAlt /> No Violations Detected</strong>
-          </div>
-          <div className="eval-meta-item score-highlight">
-            <span>Calculated Marks</span>
-            <strong className="text-emerald-400">{calculatedTotal} / {totalPossible}</strong>
-          </div>
-        </div>
-
-        {/* Questions Correction Feed */}
-        <div className="grade-modal-body">
-          <h4 className="section-title">Question Breakdown &amp; Manual Grading</h4>
-          <div className="questions-evaluation-list">
-            {questionsList.map((q, idx) => (
-              <div key={q.id} className={`eval-q-card ${q.isCorrect ? "q-correct" : "q-incorrect"}`}>
-                <div className="eval-q-header">
-                  <span className="eval-q-num">Q{idx + 1}.</span>
-                  <p className="eval-q-text">{q.text}</p>
-                  <div className="eval-q-score-input-wrap">
-                    <label>Marks:</label>
-                    <input
-                      type="number"
-                      min="0"
-                      max={q.maxMarks}
-                      value={marks[idx]}
-                      onChange={(e) => handleMarkChange(idx, e.target.value)}
-                      className="score-num-input"
-                    />
-                    <span>/ {q.maxMarks}</span>
-                  </div>
-                </div>
-
-                <div className="eval-answers-grid">
-                  <div className="ans-box student-ans">
-                    <span className="ans-label">Student Answer:</span>
-                    <strong className={q.isCorrect ? "text-green" : "text-red"}>
-                      {q.isCorrect ? <FaCheckCircle className="inline mr-1" /> : <FaTimesCircle className="inline mr-1" />}
-                      {q.studentAns}
-                    </strong>
-                  </div>
-                  {!q.isCorrect && (
-                    <div className="ans-box correct-ans">
-                      <span className="ans-label">Correct Answer:</span>
-                      <strong className="text-emerald-400">{q.correctAns}</strong>
-                    </div>
-                  )}
-                </div>
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="modal modal-xl"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="grade-title"
+      >
+        <form onSubmit={handleSave} className="grade-form">
+          <div className="modal-head">
+            <div className="modal-head-left">
+              <span className="modal-head-icon"><FaAward /></span>
+              <div>
+                <h3 className="modal-title" id="grade-title">Evaluate submission</h3>
+                <p className="modal-sub">
+                  {submission.studentName} · {submission.testTitle}
+                </p>
               </div>
-            ))}
+            </div>
+            <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+              <FaTimes />
+            </button>
           </div>
 
-          {/* Faculty Feedback Section */}
-          <div className="faculty-feedback-section mt-4">
-            <h4 className="section-title flex items-center gap-2">
-              <FaCommentDots /> Faculty Evaluation Feedback &amp; Comments
-            </h4>
-            <textarea
-              rows="3"
-              value={feedback}
-              onChange={(e) => setFeedback(e.target.value)}
-              placeholder="Enter feedback for the student..."
-              className="faculty-feedback-input"
-            />
+          {/* Summary strip */}
+          <div className="grade-summary">
+            <div className="grade-summary-item">
+              <span>Student</span>
+              <strong className="truncate">{submission.studentEmail || "—"}</strong>
+            </div>
+            <div className="grade-summary-item">
+              <span>Submitted</span>
+              <strong>{submission.date || "—"}</strong>
+            </div>
+            <div className="grade-summary-item">
+              <span>Proctoring</span>
+              <strong className={submission.proctoring?.totalStrikes ? "is-warn" : "is-ok"}>
+                <FaShieldAlt />
+                {submission.proctoring?.totalStrikes
+                  ? `${submission.proctoring.totalStrikes} strike${
+                      submission.proctoring.totalStrikes === 1 ? "" : "s"
+                    }`
+                  : "No violations"}
+              </strong>
+            </div>
+            <div className="grade-summary-item is-score">
+              <span>Awarded</span>
+              <strong>
+                {hasInvalid ? "—" : calculatedTotal} <em>/ {totalPossible}</em>
+                {!hasInvalid && <span className="grade-pct">{percent}%</span>}
+              </strong>
+            </div>
           </div>
-        </div>
 
-        {/* Footer Actions */}
-        <div className="grade-modal-footer">
-          <button className="modal-btn-cancel" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn-publish-grade" onClick={handleSave}>
-            <FaPaperPlane /> Publish Score &amp; Feedback
-          </button>
-        </div>
+          <div className="modal-body">
+            {questions.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon"><FaExclamationTriangle /></span>
+                <p className="empty-title">No question breakdown</p>
+                <p className="empty-text">
+                  This submission has no per-question data to grade.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="row-between grade-section-head">
+                  <h4 className="card-title">Question breakdown</h4>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={resetToAuto}>
+                    <FaUndo /> Reset to auto-score
+                  </button>
+                </div>
+
+                <div className="grade-q-list">
+                  {questions.map((q, idx) => {
+                    const max = q.maxMarks ?? FALLBACK_MAX;
+                    return (
+                      <div
+                        key={q.id ?? idx}
+                        className={`grade-q ${q.isCorrect ? "is-correct" : "is-incorrect"}`}
+                      >
+                        <div className="grade-q-head">
+                          <span className="grade-q-num">Q{idx + 1}</span>
+                          <p className="grade-q-text">{q.text}</p>
+                          <div className="grade-q-marks">
+                            <input
+                              type="number"
+                              className="input"
+                              min="0"
+                              max={max}
+                              step="1"
+                              value={marks[idx] ?? ""}
+                              onChange={(e) => handleMarkChange(idx, e.target.value)}
+                              aria-label={`Marks for question ${idx + 1}, out of ${max}`}
+                            />
+                            <span className="grade-q-max">/ {max}</span>
+                          </div>
+                        </div>
+
+                        <div className="grade-q-answers">
+                          <div className="grade-ans">
+                            <span className="grade-ans-label">Student answered</span>
+                            <strong className={q.isCorrect ? "is-ok" : "is-bad"}>
+                              {q.isCorrect ? <FaCheckCircle /> : <FaTimesCircle />}
+                              {q.studentAns || "Unanswered"}
+                            </strong>
+                          </div>
+                          {!q.isCorrect && (
+                            <div className="grade-ans">
+                              <span className="grade-ans-label">Correct answer</span>
+                              <strong className="is-ok">{q.correctAns}</strong>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            <div className="field grade-feedback">
+              <label className="field-label" htmlFor="grade-feedback">
+                <FaCommentDots /> Feedback for the student
+              </label>
+              <textarea
+                id="grade-feedback"
+                className="textarea"
+                rows="3"
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="What did they do well, and what should they work on?"
+              />
+            </div>
+          </div>
+
+          <div className="modal-foot">
+            {hasInvalid && (
+              <span className="field-error grow">
+                One or more marks are not valid numbers.
+              </span>
+            )}
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={hasInvalid || saving}>
+              <FaPaperPlane /> Publish score &amp; feedback
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
 }
-
-export default GradeSubmissionModal;

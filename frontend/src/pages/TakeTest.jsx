@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   FaVideo,
@@ -21,6 +21,7 @@ import {
   FaLock,
   FaRedoAlt,
   FaBug,
+  FaChartBar,
 } from "react-icons/fa";
 import {
   getStoredTests,
@@ -28,225 +29,193 @@ import {
   saveStoredSubmissions,
   getStoredResults,
   saveStoredResults,
+  nextId,
 } from "../services/storage";
-import { faceDetector } from "../services/faceDetector";
+import { faceDetector, ENGINE } from "../services/faceDetector";
 import { audioAlerts } from "../services/audioAlerts";
+import { getUser, safeGet } from "../services/session";
+import { QUESTION_BANKS } from "../data/questionBanks";
 import "../styles/takeTest.css";
 
-/* ─── Subject-Specific Question Banks ─── */
-const QUESTION_BANKS = {
-  Java: [
-    { id: 1, text: "Which data structure uses LIFO (Last In First Out) ordering?", options: ["Queue", "Stack", "Linked List", "Tree"], correct: 1 },
-    { id: 2, text: "Which keyword is used to inherit a class in Java?", options: ["implements", "inherits", "extends", "import"], correct: 2 },
-    { id: 3, text: "What is the size of int data type in Java?", options: ["8 bit", "16 bit", "32 bit", "64 bit"], correct: 2 },
-    { id: 4, text: "Which of these is NOT a Java access modifier?", options: ["public", "protected", "friend", "private"], correct: 2 },
-    { id: 5, text: "Which collection allows duplicate elements?", options: ["Set", "List", "Map", "TreeSet"], correct: 1 },
-  ],
-  DSA: [
-    { id: 1, text: "Which data structure uses LIFO (Last In First Out) ordering?", options: ["Queue", "Stack", "Linked List", "Tree"], correct: 1 },
-    { id: 2, text: "What is the worst-case time complexity of Quick Sort?", options: ["O(n log n)", "O(n²)", "O(n)", "O(log n)"], correct: 1 },
-    { id: 3, text: "Which traversal visits the root node first?", options: ["In-order", "Post-order", "Pre-order", "Level-order"], correct: 2 },
-    { id: 4, text: "What is the time complexity of searching in a balanced BST?", options: ["O(1)", "O(n)", "O(log n)", "O(n²)"], correct: 2 },
-    { id: 5, text: "Which algorithm is used to find shortest paths from a single source in weighted graphs?", options: ["Kruskal", "Prim", "Dijkstra", "Floyd-Warshall"], correct: 2 },
-  ],
-  "Web Dev": [
-    { id: 1, text: "Which HTML tag is used for internal CSS styles?", options: ["<css>", "<script>", "<style>", "<link>"], correct: 2 },
-    { id: 2, text: "What does CSS stand for?", options: ["Creative Style Sheets", "Cascading Style Sheets", "Computer Style System", "Colorful Style Sheet"], correct: 1 },
-    { id: 3, text: "Which hook manages local component state in React?", options: ["useEffect", "useMemo", "useState", "useRef"], correct: 2 },
-    { id: 4, text: "What HTTP status code means 'Resource Not Found'?", options: ["200", "401", "404", "500"], correct: 2 },
-    { id: 5, text: "Which of the following is NOT a JavaScript data type?", options: ["undefined", "boolean", "float", "symbol"], correct: 2 },
-  ],
-  DBMS: [
-    { id: 1, text: "What does SQL stand for?", options: ["Structured Query Language", "Simple Question Language", "Sequential Query Logic", "Standard Query Language"], correct: 0 },
-    { id: 2, text: "Which SQL clause is used to filter grouped data?", options: ["WHERE", "ORDER BY", "HAVING", "GROUP BY"], correct: 2 },
-    { id: 3, text: "What does ACID stand for in DBMS?", options: ["Atomicity, Consistency, Isolation, Durability", "Automated, Compact, Isolated, Durable", "All, Clear, Indexed, Data", "Accuracy, Control, Integrity, Definition"], correct: 0 },
-    { id: 4, text: "Which normal form eliminates transitive dependency?", options: ["1NF", "2NF", "3NF", "BCNF"], correct: 2 },
-    { id: 5, text: "Which command permanently removes all records without row-by-row logging?", options: ["DELETE", "DROP", "TRUNCATE", "REMOVE"], correct: 2 },
-  ],
-  OS: [
-    { id: 1, text: "Which scheduling algorithm gives minimum average waiting time?", options: ["FCFS", "Round Robin", "SJF (Shortest Job First)", "Priority"], correct: 2 },
-    { id: 2, text: "What is a deadlock condition where each process holds a resource and waits for another?", options: ["Mutual Exclusion", "Hold and Wait", "No Preemption", "Circular Wait"], correct: 1 },
-    { id: 3, text: "What is the main purpose of virtual memory?", options: ["Speed up CPU", "Simulate larger memory space", "Prevent viruses", "Cache GPU instructions"], correct: 1 },
-    { id: 4, text: "Which memory management technique divides physical memory into fixed-size blocks?", options: ["Segmentation", "Paging", "Fragmentation", "Swapping"], correct: 1 },
-    { id: 5, text: "Which system call creates a new child process in UNIX/Linux?", options: ["fork()", "exec()", "spawn()", "create()"], correct: 0 },
-  ],
-};
-
 const MAX_STRIKES = 5;
+const DETECT_INTERVAL_MS = 200;
+const MULTI_FACE_FRAMES = 4;   // ~800 ms of sustained detection
+const NO_FACE_FRAMES = 12;     // ~2.4 s
+const MULTI_FACE_COOLDOWN = 6000;
+const NO_FACE_COOLDOWN = 7000;
 
 export default function TakeTest() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const testIdParam = searchParams.get("testId");
-  const storedTests = getStoredTests();
-  const activeTestObj = (() => {
+  /* ── Which test? ─────────────────────────────────────────── */
+  const activeTest = useMemo(() => {
+    const testIdParam = searchParams.get("testId");
+    const storedTests = getStoredTests();
+
     if (testIdParam) {
       const found = storedTests.find((t) => String(t.id) === String(testIdParam));
       if (found) return found;
     }
-    try {
-      const raw = localStorage.getItem("smartassess_active_test");
-      if (raw) return JSON.parse(raw);
-    } catch (e) {}
-    return (
-      storedTests[0] || {
-        id: 1,
-        title: "Java Programming Fundamentals",
-        subject: "Java",
-        duration: 60,
-        marks: 100,
-      }
-    );
-  })();
 
-  const questions = QUESTION_BANKS[activeTestObj.subject] || QUESTION_BANKS.DSA;
-  const testMeta = {
-    id: activeTestObj.id,
-    title: activeTestObj.title,
-    code: `${(activeTestObj.subject || "CS").toUpperCase()}-EXAM`,
-    duration: activeTestObj.duration || 60,
-    totalMarks: activeTestObj.marks || 100,
-  };
+    // safeGet never throws on a corrupt value — a bad JSON blob here used to
+    // take the whole exam screen down.
+    const active = safeGet("smartassess_active_test");
+    if (active && typeof active === "object") return active;
 
-  /* ── Exam Phase ── */
-  const [phase, setPhase] = useState("instructions"); // instructions | test | submitted
+    return storedTests[0] || {
+      id: 1, title: "Java Programming Fundamentals", subject: "Java",
+      duration: 60, marks: 100,
+    };
+  }, [searchParams]);
+
+  const questions = useMemo(
+    () => QUESTION_BANKS[activeTest.subject] || QUESTION_BANKS.DSA,
+    [activeTest.subject]
+  );
+
+  const testMeta = useMemo(
+    () => ({
+      id: activeTest.id,
+      title: activeTest.title,
+      subject: activeTest.subject,
+      code: `${String(activeTest.subject || "CS").toUpperCase().replace(/\s+/g, "")}-EXAM`,
+      duration: Number(activeTest.duration) || 60,
+      totalMarks: Number(activeTest.marks) || 100,
+    }),
+    [activeTest]
+  );
+
+  /* ── Exam state ──────────────────────────────────────────── */
+  const [phase, setPhase] = useState("instructions");
   const [current, setCurrent] = useState(0);
   const [answers, setAnswers] = useState({});
-  const [flagged, setFlagged] = useState(new Set());
+  const [flagged, setFlagged] = useState(() => new Set());
   const [timeLeft, setTimeLeft] = useState(testMeta.duration * 60);
 
-  /* ── Strict Proctoring States ── */
-  const [camStatus, setCamStatus] = useState("uninitialized"); // uninitialized | granted | active | denied | error | stream_lost
+  /* ── Proctoring state ────────────────────────────────────── */
+  const [camStatus, setCamStatus] = useState("uninitialized");
   const [camErrorMsg, setCamErrorMsg] = useState("");
-  const [stream, setStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isMicAvailable, setIsMicAvailable] = useState(false);
+  const [streamVersion, setStreamVersion] = useState(0);
 
-  // Fullscreen states
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenLockout, setFullscreenLockout] = useState(false);
   const [lockoutReason, setLockoutReason] = useState("");
 
-  // Face Detection states
-  const [detectionResult, setDetectionResult] = useState({
-    faces: [],
-    faceCount: 0,
-    status: "initializing",
-    isCentered: true,
-    lightingOk: true,
-    message: "Initializing proctoring engine...",
+  const [detection, setDetection] = useState({
+    faces: [], faceCount: 0, status: "initializing",
+    isCentered: true, lightingOk: true,
+    message: "Loading face-detection model…",
   });
-  const [simulationMode, setSimulationMode] = useState("none"); // none | multi_face | no_face | look_away
+  const [simulationMode, setSimulationMode] = useState("none");
+  const [engineState, setEngineState] = useState(ENGINE.LOADING);
 
-  // Violation Audit & Trust Score
   const [violations, setViolations] = useState([]);
   const [strikes, setStrikes] = useState(0);
   const [trustScore, setTrustScore] = useState(100);
-  const [floatingToasts, setFloatingToasts] = useState([]);
+  const [toasts, setToasts] = useState([]);
   const [showSimPanel, setShowSimPanel] = useState(false);
   const [camExpanded, setCamExpanded] = useState(false);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
-  const animationFrameRef = useRef(null);
-  const lastAlertTimeRef = useRef(0);
-  const noFaceCounterRef = useRef(0);
-  const multiFaceCounterRef = useRef(0);
+  const lastAlertRef = useRef(0);
+  const noFaceCount = useRef(0);
+  const multiFaceCount = useRef(0);
+  const deadlineRef = useRef(null);
+  const submittedRef = useRef(false);
 
-  /* ── Helper: Add Violation Log & Sound ── */
+  /**
+   * `phase` mirrored into a ref. Event handlers registered once (media-track
+   * listeners in particular) close over the value at registration time; the
+   * camera was always requested while phase === "instructions", so a
+   * `phase === "test"` check inside those handlers could never be true and
+   * mid-exam camera loss was never recorded.
+   */
+  const phaseRef = useRef(phase);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+
+  /* ── Violations ──────────────────────────────────────────── */
   const recordViolation = useCallback((title, details, severity = "warn") => {
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString("en-US", { hour12: false });
-    const newViolation = {
-      id: `${Date.now()}-${Math.random()}`,
-      time: timeStr,
-      title,
-      details,
-      severity,
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      time: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+      title, details, severity,
     };
 
-    setViolations((prev) => [newViolation, ...prev]);
-
-    // Update strikes and trust score
-    setStrikes((prevStrikes) => {
-      const nextStrikes = prevStrikes + 1;
-      return nextStrikes;
-    });
-
+    setViolations((prev) => [entry, ...prev]);
+    setStrikes((prev) => prev + 1);
     setTrustScore((prev) => Math.max(10, prev - (severity === "critical" ? 20 : 12)));
+    setToasts((prev) => [{ id: entry.id, msg: `${title}: ${details}`, type: severity }, ...prev.slice(0, 2)]);
 
-    // Toast alert
-    setFloatingToasts((prev) => [
-      { id: Date.now(), msg: `${title}: ${details}`, type: severity },
-      ...prev.slice(0, 3),
-    ]);
-
-    // Audio alert
-    if (severity === "critical" || title.includes("Multiple")) {
-      audioAlerts.playMultiFaceAlert();
-    } else {
-      audioAlerts.playFullscreenViolationAlert();
-    }
+    if (severity === "critical") audioAlerts.playMultiFaceAlert();
+    else audioAlerts.playFullscreenViolationAlert();
   }, []);
 
-  /* ── 1. Strict Camera Access Handler ── */
+  /* ── Camera ──────────────────────────────────────────────── */
+  const stopStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
   const requestCameraAccess = useCallback(async () => {
     setCamStatus("requesting");
     setCamErrorMsg("");
 
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Your browser does not support WebRTC camera access. Please use modern Chrome, Edge, or Firefox.");
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          "This browser does not support camera access. Use a recent Chrome, Edge, Firefox or Safari."
+        );
       }
 
-      // Stop existing stream if any
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
+      stopStream();
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640, min: 320 },
-          height: { ideal: 480, min: 240 },
-          facingMode: "user",
-          frameRate: { ideal: 30, max: 30 },
-        },
-        audio: true,
-      }).catch(async (audioErr) => {
-        // Fallback to video-only if microphone is absent or blocked
-        console.warn("Audio track failed, requesting video only:", audioErr);
-        setIsMicAvailable(false);
-        return await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640, min: 320 },
-            height: { ideal: 480, min: 240 },
-            facingMode: "user",
-          },
+      const videoConstraints = {
+        width: { ideal: 640, min: 320 },
+        height: { ideal: 480, min: 240 },
+        facingMode: "user",
+        frameRate: { ideal: 30, max: 30 },
+      };
+
+      let mediaStream;
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: videoConstraints,
+          audio: true,
+        });
+      } catch (err) {
+        // Only retry without audio when the CAMERA itself is fine. A denied
+        // camera must surface as a denial rather than a second failing prompt.
+        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") throw err;
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: videoConstraints,
           audio: false,
         });
-      });
+      }
 
       streamRef.current = mediaStream;
-      setStream(mediaStream);
       setIsMicAvailable(mediaStream.getAudioTracks().length > 0);
 
-      // Track listeners for stream interruption
       const videoTrack = mediaStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
           setCamStatus("stream_lost");
-          if (phase === "test") {
-            recordViolation("Camera Stream Terminated", "Camera connection was lost or disconnected.", "critical");
+          if (phaseRef.current === "test") {
+            recordViolation(
+              "Camera stream terminated",
+              "The camera connection was lost or the device was disconnected.",
+              "critical"
+            );
           }
         };
-        videoTrack.onmute = () => {
-          setCamStatus("stream_lost");
-        };
-        videoTrack.onunmute = () => {
-          setCamStatus("active");
-        };
+        videoTrack.onmute = () => setCamStatus("stream_lost");
+        videoTrack.onunmute = () => setCamStatus("active");
       }
 
       if (videoRef.current) {
@@ -254,6 +223,7 @@ export default function TakeTest() {
         await videoRef.current.play().catch(() => {});
       }
 
+      setStreamVersion((v) => v + 1);
       setCamStatus("active");
       audioAlerts.playSuccessChime();
     } catch (err) {
@@ -261,592 +231,623 @@ export default function TakeTest() {
       setCamStatus("denied");
       setCamErrorMsg(
         err.name === "NotAllowedError" || err.name === "PermissionDeniedError"
-          ? "Camera permission was denied. Please allow camera access in your browser address bar settings to proceed."
+          ? "Camera permission was denied. Allow camera access from your browser's address bar, then retry."
           : err.name === "NotFoundError" || err.name === "DevicesNotFoundError"
-          ? "No webcam device found on this system. Please connect a working camera."
-          : `Camera error: ${err.message || "Failed to initialize webcam"}`
+          ? "No webcam was found. Connect a camera and retry."
+          : err.name === "NotReadableError"
+          ? "The camera is in use by another application. Close it and retry."
+          : err.message || "Could not start the webcam."
       );
     }
-  }, [phase, recordViolation]);
+  }, [recordViolation, stopStream]);
 
-  /* Re-bind video element when phase changes or stream updates */
+  /* Re-attach the stream whenever the <video> element is remounted. */
   useEffect(() => {
-    if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
-      videoRef.current.play().catch(() => {});
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (video && stream && video.srcObject !== stream) {
+      video.srcObject = stream;
+      video.play().catch(() => {});
     }
-  }, [phase, stream]);
+  }, [phase, streamVersion, camExpanded]);
 
-  /* ── 2. Real-time Face & Multi-Face Detection Loop ── */
+  /* Always release the camera on unmount. */
+  useEffect(() => stopStream, [stopStream]);
+
+  /* Start loading the detection model immediately — it is ~230 KB of weights
+     plus a WASM runtime, so kicking it off at mount means it is usually ready
+     by the time the candidate has granted camera access. */
   useEffect(() => {
-    let active = true;
-    let frameInterval = null;
-
-    const runDetection = async () => {
-      if (!active) return;
-      if (videoRef.current && camStatus === "active") {
-        try {
-          const res = await faceDetector.detectFaces(videoRef.current, { simulationMode });
-          if (active) {
-            setDetectionResult(res);
-
-            // Draw HUD on Canvas
-            if (canvasRef.current && videoRef.current) {
-              faceDetector.drawHUD(canvasRef.current, videoRef.current, res);
-            }
-
-            // Continuous Strict Multi-Frame Consistency Rules Engine during Exam
-            if (phase === "test") {
-              const now = Date.now();
-
-              // Rule 1: Multiple Faces Detected (>1 face)
-              // Avoid false detections by requiring 4 consecutive positive checks (~800ms)
-              if (res.status === "multi_face" || res.faceCount > 1) {
-                multiFaceCounterRef.current++;
-                noFaceCounterRef.current = 0; // reset opposite counter
-
-                if (multiFaceCounterRef.current >= 4 && now - lastAlertTimeRef.current > 6000) {
-                  lastAlertTimeRef.current = now;
-                  recordViolation(
-                    "Multiple faces detected.",
-                    `Detected ${res.faceCount} persons in camera frame. Exactly one face must be present.`,
-                    "critical"
-                  );
-                }
-              }
-              // Rule 2: Candidate not detected (0 faces for specified duration ~2.5-3 seconds = 12 checks)
-              else if (res.status === "no_face" || res.faceCount === 0) {
-                noFaceCounterRef.current++;
-                multiFaceCounterRef.current = 0; // reset opposite counter
-
-                if (noFaceCounterRef.current >= 12 && now - lastAlertTimeRef.current > 7000) {
-                  lastAlertTimeRef.current = now;
-                  recordViolation(
-                    "Candidate not detected.",
-                    "No face detected in camera frame for specified duration. Return to camera view immediately.",
-                    "warn"
-                  );
-                }
-              }
-              // Rule 3: Exactly One Face Present (Optimal)
-              else {
-                // Reset violation counters when exactly one face is confirmed
-                multiFaceCounterRef.current = 0;
-                noFaceCounterRef.current = 0;
-              }
-            }
-          }
-        } catch (e) {
-          // ignore detection error on frame drop
-        }
-      }
-    };
-
-    // Run frame analysis every 200ms (5 FPS is optimal for real-time vision without CPU stress)
-    frameInterval = setInterval(runDetection, 200);
-
+    let cancelled = false;
+    faceDetector.init().then((ok) => {
+      if (cancelled) return;
+      setEngineState(ok ? ENGINE.READY : ENGINE.UNAVAILABLE);
+    });
     return () => {
-      active = false;
-      if (frameInterval) clearInterval(frameInterval);
-    };
-  }, [camStatus, phase, simulationMode, recordViolation]);
-
-  /* ── 3. Strict Fullscreen Enforcement ── */
-  const enterFullscreenAndStart = async () => {
-    if (camStatus !== "active") {
-      alert("Strict camera access is mandatory. Please enable your camera first.");
-      return;
-    }
-
-    try {
-      const docEl = document.documentElement;
-      if (docEl.requestFullscreen) {
-        await docEl.requestFullscreen();
-      } else if (docEl.webkitRequestFullscreen) {
-        await docEl.webkitRequestFullscreen();
-      } else if (docEl.msRequestFullscreen) {
-        await docEl.msRequestFullscreen();
-      }
-      setIsFullscreen(true);
-      setFullscreenLockout(false);
-      setPhase("test");
-      audioAlerts.playSuccessChime();
-    } catch (err) {
-      console.warn("Fullscreen request error, proceeding with window lock:", err);
-      setIsFullscreen(true);
-      setPhase("test");
-    }
-  };
-
-  const resumeFullscreen = async () => {
-    try {
-      const docEl = document.documentElement;
-      if (!document.fullscreenElement) {
-        if (docEl.requestFullscreen) {
-          await docEl.requestFullscreen();
-        } else if (docEl.webkitRequestFullscreen) {
-          await docEl.webkitRequestFullscreen();
-        }
-      }
-      setFullscreenLockout(false);
-      setIsFullscreen(true);
-      audioAlerts.playSuccessChime();
-    } catch (e) {
-      setFullscreenLockout(false);
-    }
-  };
-
-  /* Fullscreen & Tab Switch Watchers during Exam */
-  useEffect(() => {
-    if (phase !== "test") return;
-
-    const handleFullscreenChange = () => {
-      const isInFs = Boolean(
-        document.fullscreenElement ||
-        document.webkitFullscreenElement ||
-        document.mozFullScreenElement ||
-        document.msFullscreenElement
-      );
-      setIsFullscreen(isInFs);
-
-      if (!isInFs) {
-        setLockoutReason("Full Screen Mode Exited. Fullscreen is strictly mandatory during examination.");
-        setFullscreenLockout(true);
-        recordViolation("Fullscreen Exited", "Candidate left fullscreen mode (ESC or window resize).", "critical");
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        setLockoutReason("Tab Switch / Window Minimized Detected. You must stay on the examination tab.");
-        setFullscreenLockout(true);
-        recordViolation("Tab Switch Detected", "Candidate navigated away from examination window.", "critical");
-      }
-    };
-
-    const handleWindowBlur = () => {
-      // Window lost focus
-      if (phase === "test" && !document.hidden) {
-        recordViolation("Window Focus Lost", "Candidate interacted with external application.", "warn");
-      }
-    };
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("blur", handleWindowBlur);
-
-    return () => {
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
-      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("blur", handleWindowBlur);
-    };
-  }, [phase, recordViolation]);
-
-  /* Stop stream on complete unmount */
-  useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
+      cancelled = true;
     };
   }, []);
 
-  /* ── Auto-submit if strikes exceeded ── */
-  useEffect(() => {
-    if (phase === "test" && strikes >= MAX_STRIKES) {
-      alert("CRITICAL PROCTORING LIMIT EXCEEDED: 5 security strikes recorded. Test is being automatically submitted for disciplinary review.");
-      handleFinalSubmit();
-    }
-  }, [strikes, phase]);
+  /* Free the model when leaving the exam. */
+  useEffect(() => () => faceDetector.close(), []);
 
-  /* ── Exam Countdown Timer ── */
-  useEffect(() => {
-    if (phase !== "test") return;
-    if (timeLeft <= 0) {
-      handleFinalSubmit();
-      return;
-    }
-    const t = setTimeout(() => setTimeLeft((p) => p - 1), 1000);
-    return () => clearTimeout(t);
-  }, [phase, timeLeft]);
+  /* ── Submission ──────────────────────────────────────────── */
+  const score = useMemo(() => {
+    const perQuestion = testMeta.totalMarks / questions.length;
+    return questions.reduce(
+      (acc, q) => (answers[q.id] === q.correct ? acc + perQuestion : acc),
+      0
+    );
+  }, [questions, answers, testMeta.totalMarks]);
 
-  /* Remove floating toasts after timeout */
-  useEffect(() => {
-    if (floatingToasts.length === 0) return;
-    const timer = setTimeout(() => {
-      setFloatingToasts((prev) => prev.slice(1));
-    }, 4000);
-    return () => clearTimeout(timer);
-  }, [floatingToasts]);
+  const handleFinalSubmit = useCallback(() => {
+    // Guards against a double submit — the timer expiring at the same moment
+    // the strike limit trips would otherwise write two submissions.
+    if (submittedRef.current) return;
+    submittedRef.current = true;
 
-  const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-
-  const answeredCount = Object.keys(answers).length;
-  const marksPerQuestion = testMeta.totalMarks / questions.length;
-  const score = questions.reduce(
-    (acc, qItem) => (answers[qItem.id] === qItem.correct ? acc + marksPerQuestion : acc),
-    0
-  );
-
-  const handleFinalSubmit = () => {
-    // Release fullscreen
     if (document.fullscreenElement && document.exitFullscreen) {
       document.exitFullscreen().catch(() => {});
     }
 
-    const storedUser = JSON.parse(localStorage.getItem("user")) || {
-      name: "Rahul Verma",
-      email: "rahul.verma@student.com",
-    };
-    const calculatedScore = Math.round(score);
+    // Proctoring is over: release the camera immediately rather than leaving
+    // the webcam light on through the results screen.
+    stopStream();
 
-    const questionResults = questions.map((qItem) => {
-      const isCorrect = answers[qItem.id] === qItem.correct;
+    const user = getUser() || {};
+    const perQuestion = testMeta.totalMarks / questions.length;
+    const calculated = Math.round(score);
+
+    const questionResults = questions.map((q) => {
+      const isCorrect = answers[q.id] === q.correct;
       return {
-        id: qItem.id,
-        text: qItem.text,
-        studentAns: answers[qItem.id] !== undefined ? qItem.options[answers[qItem.id]] : "Unanswered",
-        correctAns: qItem.options[qItem.correct],
+        id: q.id,
+        text: q.text,
+        studentAns: answers[q.id] !== undefined ? q.options[answers[q.id]] : "Unanswered",
+        correctAns: q.options[q.correct],
         isCorrect,
-        maxMarks: marksPerQuestion,
-        scoreGiven: isCorrect ? marksPerQuestion : 0,
+        maxMarks: Math.round(perQuestion),
+        scoreGiven: isCorrect ? Math.round(perQuestion) : 0,
       };
     });
 
-    const newSub = {
-      id: Date.now(),
-      studentName: storedUser.name || "Rahul Verma",
-      studentEmail: storedUser.email || "rahul.verma@student.com",
+    const now = new Date();
+    const submission = {
+      id: nextId(),
+      studentName: user.name || "Student",
+      studentEmail: user.email || "",
       testId: testMeta.id,
       testTitle: testMeta.title,
-      date: new Date().toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
+      subject: testMeta.subject,
+      date: now.toLocaleString("en-GB", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit",
       }),
-      score: `${calculatedScore} / ${testMeta.totalMarks}`,
-      totalScore: calculatedScore,
+      score: `${calculated} / ${testMeta.totalMarks}`,
+      totalScore: calculated,
+      maxScore: testMeta.totalMarks,
       status: "Graded & Published",
       feedback:
-        calculatedScore >= 60
-          ? "Well done! Solid demonstration of key concepts."
-          : "Need revision on fundamentals and practical scenarios.",
+        calculated >= testMeta.totalMarks * 0.6
+          ? "Solid demonstration of the key concepts."
+          : "Revise the fundamentals and practise applied scenarios.",
       questions: questionResults,
       proctoring: {
         trustScore,
         totalStrikes: strikes,
         violationsList: violations,
-        cameraVerified: true,
+        cameraVerified: camStatus === "active",
+        // Whether automatic identity checks were actually running. A degraded
+        // attempt must be visible to whoever reviews the paper.
+        faceDetection: engineState === ENGINE.READY ? "active" : "unavailable",
       },
     };
 
-    const subs = getStoredSubmissions();
-    saveStoredSubmissions([newSub, ...subs]);
+    saveStoredSubmissions([submission, ...getStoredSubmissions()]);
 
-    const newResult = {
-      id: Date.now(),
+    const percent =
+      testMeta.totalMarks > 0 ? Math.round((calculated / testMeta.totalMarks) * 100) : 0;
+
+    const result = {
+      id: nextId(),
+      testId: testMeta.id,
       title: testMeta.title,
       test: testMeta.title,
-      subject: activeTestObj.subject || "Computer Science",
-      date: new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
-      score: `${calculatedScore}%`,
-      student: storedUser.name || "Rahul Verma",
-      reviewer: "AI Proctor & Dr. Johnson",
+      subject: testMeta.subject || "Computer Science",
+      date: now.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+      score: `${percent}%`,
+      percent,
+      student: user.name || "Student",
+      studentEmail: user.email || "",
+      reviewer: "AI Proctor",
     };
-    const results = getStoredResults();
-    saveStoredResults([newResult, ...results]);
 
+    saveStoredResults([result, ...getStoredResults()]);
     setPhase("submitted");
-  };
+  }, [
+    answers, questions, score, testMeta, trustScore, strikes,
+    violations, camStatus, stopStream, engineState,
+  ]);
 
-  const toggleMute = () => {
-    if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach((t) => {
-        t.enabled = isMuted;
-      });
-      setIsMuted((prev) => !prev);
+  /* Auto-submit once the strike limit is reached. */
+  useEffect(() => {
+    if (phase === "test" && strikes >= MAX_STRIKES && !submittedRef.current) {
+      handleFinalSubmit();
+    }
+  }, [strikes, phase, handleFinalSubmit]);
+
+  /* ── Timer ───────────────────────────────────────────────── */
+  useEffect(() => {
+    if (phase !== "test") return undefined;
+
+    // Anchored to a wall-clock deadline. A per-tick decrement drifts whenever
+    // the tab is throttled, silently handing back extra exam time.
+    if (deadlineRef.current === null) {
+      deadlineRef.current = Date.now() + timeLeft * 1000;
+    }
+
+    const tick = () => {
+      const remaining = Math.max(
+        0,
+        Math.round((deadlineRef.current - Date.now()) / 1000)
+      );
+      setTimeLeft(remaining);
+      if (remaining <= 0) handleFinalSubmit();
+    };
+
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, handleFinalSubmit]);
+
+  /* ── Detection loop ──────────────────────────────────────── */
+  useEffect(() => {
+    if (camStatus !== "active" || phase === "submitted") return undefined;
+
+    let cancelled = false;
+    let timer = null;
+    let running = false;
+
+    const run = async () => {
+      // Skips rather than stacking when a frame takes longer than the
+      // interval; overlapping runs double-counted violation frames.
+      if (cancelled || running || !videoRef.current) return;
+      running = true;
+
+      try {
+        const res = await faceDetector.detectFaces(videoRef.current, { simulationMode });
+        if (cancelled) return;
+
+        setDetection(res);
+
+        const canvas = canvasRef.current;
+        if (canvas && videoRef.current) {
+          // Match the backing store to the element's real box so the HUD is
+          // never stretched by CSS.
+          const rect = canvas.getBoundingClientRect();
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const w = Math.round(rect.width * dpr);
+          const h = Math.round(rect.height * dpr);
+          if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+            canvas.width = w;
+            canvas.height = h;
+          }
+          faceDetector.drawHUD(canvas, videoRef.current, res);
+        }
+
+        if (phaseRef.current !== "test") return;
+
+        const now = Date.now();
+
+        if (res.status === "multi_face" || res.faceCount > 1) {
+          multiFaceCount.current += 1;
+          noFaceCount.current = 0;
+          if (
+            multiFaceCount.current >= MULTI_FACE_FRAMES &&
+            now - lastAlertRef.current > MULTI_FACE_COOLDOWN
+          ) {
+            lastAlertRef.current = now;
+            recordViolation(
+              "Multiple faces detected",
+              `${res.faceCount} people are visible. Exactly one face must be in frame.`,
+              "critical"
+            );
+          }
+        } else if (
+          res.status === "loading" ||
+          res.status === "engine_unavailable" ||
+          res.status === "no_feed"
+        ) {
+          // No detector, no judgement — never strike a candidate for a
+          // condition they cannot influence.
+          multiFaceCount.current = 0;
+          noFaceCount.current = 0;
+        } else if (res.status === "no_face" || res.faceCount === 0) {
+          noFaceCount.current += 1;
+          multiFaceCount.current = 0;
+          if (
+            noFaceCount.current >= NO_FACE_FRAMES &&
+            now - lastAlertRef.current > NO_FACE_COOLDOWN
+          ) {
+            lastAlertRef.current = now;
+            recordViolation(
+              "Candidate not detected",
+              "No face was visible for several seconds. Return to the camera view.",
+              "warn"
+            );
+          }
+        } else {
+          multiFaceCount.current = 0;
+          noFaceCount.current = 0;
+        }
+      } catch {
+        // A dropped frame must not kill the loop.
+      } finally {
+        running = false;
+      }
+    };
+
+    timer = setInterval(run, DETECT_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [camStatus, phase, simulationMode, recordViolation]);
+
+  /* ── Fullscreen & focus enforcement ──────────────────────── */
+  const enterFullscreenAndStart = async () => {
+    if (camStatus !== "active") return;
+
+    try {
+      const el = document.documentElement;
+      const request =
+        el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+      if (request) await request.call(el);
+    } catch (err) {
+      console.warn("Fullscreen request failed; continuing in windowed mode:", err);
+    } finally {
+      deadlineRef.current = null; // start the clock now, not at mount
+      setPhase("test");
+      audioAlerts.playSuccessChime();
     }
   };
 
-  /* ──────────────────────────────────────────────────────────
-     SCREEN 1: INSTRUCTION & STRICT PRE-EXAM SYSTEM VERIFICATION
-  ────────────────────────────────────────────────────────── */
+  const resumeFullscreen = async () => {
+    try {
+      const el = document.documentElement;
+      if (!document.fullscreenElement) {
+        const request = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (request) await request.call(el);
+      }
+      audioAlerts.playSuccessChime();
+    } catch {
+      // Some browsers refuse without a fresh gesture; unlock either way.
+    } finally {
+      setFullscreenLockout(false);
+    }
+  };
+
+  useEffect(() => {
+    if (phase !== "test") return undefined;
+
+    const onFullscreenChange = () => {
+      const inFs = Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      if (!inFs && !submittedRef.current) {
+        setLockoutReason("Fullscreen mode was exited. Fullscreen is mandatory during the exam.");
+        setFullscreenLockout(true);
+        recordViolation(
+          "Fullscreen exited",
+          "The candidate left fullscreen mode.",
+          "critical"
+        );
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden && !submittedRef.current) {
+        setLockoutReason("Tab switch or window minimise detected. Stay on the exam tab.");
+        setFullscreenLockout(true);
+        recordViolation(
+          "Tab switch detected",
+          "The candidate navigated away from the exam window.",
+          "critical"
+        );
+      }
+    };
+
+    // `blur` also fires when the tab is hidden, which double-counted a single
+    // tab switch as two violations. visibilitychange owns that case.
+    const onBlur = () => {
+      if (!document.hidden && !submittedRef.current) {
+        recordViolation(
+          "Window focus lost",
+          "The candidate interacted with another application.",
+          "warn"
+        );
+      }
+    };
+
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("blur", onBlur);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [phase, recordViolation]);
+
+  /* Warn before an accidental reload/close mid-exam. */
+  useEffect(() => {
+    if (phase !== "test") return undefined;
+    const onBeforeUnload = (e) => {
+      if (submittedRef.current) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [phase]);
+
+  /* Toast expiry — one timer per toast. */
+  useEffect(() => {
+    if (toasts.length === 0) return undefined;
+    const id = setTimeout(() => setToasts((prev) => prev.slice(0, -1)), 4500);
+    return () => clearTimeout(id);
+  }, [toasts]);
+
+  const toggleMute = () => {
+    const tracks = streamRef.current?.getAudioTracks() || [];
+    if (tracks.length === 0) return; // don't flip the icon with no mic
+    const nextMuted = !isMuted;
+    tracks.forEach((t) => { t.enabled = !nextMuted; });
+    setIsMuted(nextMuted);
+  };
+
+  const fmt = (s) =>
+    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  const answeredCount = Object.keys(answers).length;
+  const isMultiFace = detection.status === "multi_face" || detection.faceCount > 1;
+  const isNoFace = detection.status === "no_face" || detection.faceCount === 0;
+
+  /* ══════════════════════════════════════════════════════════
+     SCREEN 1 — Instructions & system check
+     ══════════════════════════════════════════════════════════ */
   if (phase === "instructions") {
-    const isReadyToStart = camStatus === "active" && detectionResult.status !== "no_feed";
+    const engineUnavailable = engineState === ENGINE.UNAVAILABLE;
+    const engineLoading = engineState === ENGINE.LOADING;
+    const faceVerified = detection.faceCount === 1;
+
+    // If the detector genuinely cannot load, fall back to camera-only
+    // verification rather than locking the candidate out of their exam.
+    // The degradation is shown on screen and recorded on the submission.
+    const ready =
+      camStatus === "active" && (faceVerified || engineUnavailable);
 
     return (
-      <div className="tt-instruction-screen">
+      <div className="tt-screen tt-instructions">
         <div className="tt-instr-card">
-          <div className="tt-instr-header">
-            <div className="tt-shield-badge">
-              <FaShieldAlt className="tt-instr-shield" />
-            </div>
+          <header className="tt-instr-head">
+            <span className="tt-shield"><FaShieldAlt /></span>
             <h1>{testMeta.title}</h1>
-            <div className="tt-header-tags">
-              <span className="tt-instr-code">{testMeta.code}</span>
-              <span className="tt-instr-badge strict">STRICT PROCTORING ENABLED</span>
+            <div className="tt-instr-tags">
+              <span className="badge badge-neutral">{testMeta.code}</span>
+              <span className="badge badge-danger"><FaLock /> Strict proctoring</span>
             </div>
+          </header>
+
+          <div className="tt-instr-facts">
+            <Fact label="Duration" value={`${testMeta.duration} min`} />
+            <Fact label="Questions" value={questions.length} />
+            <Fact label="Total marks" value={testMeta.totalMarks} />
+            <Fact label="Strike limit" value={MAX_STRIKES} />
           </div>
 
-          {/* Test Meta info */}
-          <div className="tt-instr-grid">
-            <div className="tt-instr-item">
-              <strong>Duration</strong>
-              <span>{testMeta.duration} mins</span>
-            </div>
-            <div className="tt-instr-item">
-              <strong>Questions</strong>
-              <span>{questions.length}</span>
-            </div>
-            <div className="tt-instr-item">
-              <strong>Total Marks</strong>
-              <span>{testMeta.totalMarks}</span>
-            </div>
-            <div className="tt-instr-item">
-              <strong>Security Level</strong>
-              <span style={{ color: "#10b981", fontSize: "16px" }}>Strict (AI Live)</span>
-            </div>
-          </div>
-
-          {/* System Check & Camera Diagnostic View */}
-          <div className="tt-syscheck-container">
-            <h3 className="tt-section-title">
-              <FaVideo /> Pre-Exam Hardware &amp; Security Validation
-            </h3>
-            <p className="tt-section-subtitle">
-              Strict camera verification and fullscreen authorization are mandatory before starting this assessment.
+          <section className="tt-syscheck">
+            <h2 className="tt-section-title"><FaVideo /> Hardware &amp; security check</h2>
+            <p className="tt-section-sub">
+              Camera verification and fullscreen authorisation are required before you can begin.
             </p>
 
-            <div className="tt-syscheck-layout">
-              {/* Left: Camera Preview Viewport with HUD Canvas */}
-              <div className="tt-cam-preview-box">
-                <div className="tt-preview-viewport">
-                  <video
-                    ref={videoRef}
-                    className="tt-preview-video"
-                    muted
-                    playsInline
-                    autoPlay
-                  />
-                  <canvas ref={canvasRef} className="tt-hud-canvas" width={400} height={300} />
+            <div className="tt-syscheck-grid">
+              <div className="tt-cam-preview">
+                <div className="tt-viewport">
+                  <video ref={videoRef} className="tt-video" muted playsInline autoPlay />
+                  <canvas ref={canvasRef} className="tt-hud" />
 
-                  {camStatus === "active" && (
-                    <div className="tt-live-indicator-pill">
-                      <span className="tt-live-dot" /> LIVE AI TRACKING
-                    </div>
-                  )}
-
-                  {camStatus !== "active" && (
-                    <div className="tt-cam-prompt-overlay">
-                      <FaVideo className="tt-cam-large-icon" />
-                      <h4>Camera Access Required</h4>
-                      <p>Click below to grant camera access and activate facial recognition.</p>
+                  {camStatus === "active" ? (
+                    <span className="tt-live-pill">
+                      <span className="dot dot-pulse" /> Live AI tracking
+                    </span>
+                  ) : (
+                    <div className="tt-cam-prompt">
+                      <FaVideo className="tt-cam-prompt-icon" />
+                      <h3>Camera access required</h3>
+                      <p>Grant access to activate facial verification.</p>
                       <button
-                        className="btn-primary tt-grant-btn"
+                        className="btn btn-primary"
                         onClick={requestCameraAccess}
+                        disabled={camStatus === "requesting"}
                       >
-                        <FaVideo /> Enable Webcam
+                        {camStatus === "requesting" ? <span className="spinner" /> : <FaVideo />}
+                        Enable webcam
                       </button>
                     </div>
                   )}
                 </div>
 
                 {camStatus === "denied" && (
-                  <div className="tt-cam-error-box">
+                  <div className="alert alert-error">
                     <FaExclamationTriangle />
-                    <div>
-                      <strong>Camera Permission Blocked</strong>
-                      <p>{camErrorMsg}</p>
+                    <div className="alert-body">
+                      <div className="alert-title">Camera blocked</div>
+                      <div>{camErrorMsg}</div>
                     </div>
-                    <button className="btn-secondary btn-sm" onClick={requestCameraAccess}>
-                      <FaRedoAlt /> Retry Access
+                    <button className="btn btn-sm btn-danger-soft" onClick={requestCameraAccess}>
+                      <FaRedoAlt /> Retry
                     </button>
                   </div>
                 )}
               </div>
 
-              {/* Right: Validation Checklist */}
-              <div className="tt-checklist-pane">
-                <div className={`tt-check-card ${camStatus === "active" ? "pass" : "fail"}`}>
-                  <div className="tt-check-icon">
-                    {camStatus === "active" ? <FaCheckCircle /> : <FaTimes />}
-                  </div>
-                  <div className="tt-check-text">
-                    <strong>1. Strict Camera Access</strong>
-                    <span>
-                      {camStatus === "active"
-                        ? "Webcam authorized and active"
-                        : "Mandatory: Webcam permission required"}
-                    </span>
-                  </div>
-                </div>
+              <div className="tt-checklist">
+                <Check
+                  ok={camStatus === "active"}
+                  title="Camera access"
+                  text={camStatus === "active" ? "Webcam authorised and active" : "Webcam permission required"}
+                />
+                <Check
+                  ok={faceVerified}
+                  optional={engineUnavailable}
+                  title="Single face verification"
+                  text={
+                    engineLoading
+                      ? "Loading the detection model…"
+                      : engineUnavailable
+                      ? "Detector unavailable — proceeding with camera recording only"
+                      : faceVerified
+                      ? "Candidate identified"
+                      : detection.faceCount > 1
+                      ? "Multiple faces — only one person may be visible"
+                      : "Align your face with the centre guide"
+                  }
+                />
+                <Check
+                  ok={isMicAvailable}
+                  optional
+                  title="Audio stream"
+                  text={isMicAvailable ? "Microphone detected" : "No microphone — video-only proctoring"}
+                />
+                <Check
+                  ok
+                  info
+                  title="Fullscreen lockdown"
+                  text="Exiting fullscreen or switching tabs is recorded as a violation."
+                />
+              </div>
+            </div>
+          </section>
 
-                <div
-                  className={`tt-check-card ${
-                    camStatus === "active" && detectionResult.faceCount === 1 ? "pass" : "pending"
-                  }`}
-                >
-                  <div className="tt-check-icon">
-                    {detectionResult.faceCount === 1 ? <FaCheckCircle /> : <FaEye />}
-                  </div>
-                  <div className="tt-check-text">
-                    <strong>2. Single Face Verification</strong>
-                    <span>
-                      {detectionResult.faceCount === 1
-                        ? "Candidate Face Identified (Optimal)"
-                        : detectionResult.faceCount > 1
-                        ? "Multiple Faces in View — Ensure only 1 person is visible"
-                        : "Align your face with the center target oval"}
-                    </span>
-                  </div>
-                </div>
+          <ul className="tt-rules">
+            <li><FaCheckCircle className="is-ok" /> Keep your face centred in frame for the whole exam.</li>
+            <li><FaExclamationTriangle className="is-warn" /> Extra people in frame, or leaving frame, trigger strikes.</li>
+            <li><FaExclamationTriangle className="is-warn" /> {MAX_STRIKES} strikes auto-submits your paper for review.</li>
+          </ul>
 
-                <div className={`tt-check-card ${isMicAvailable ? "pass" : "pending"}`}>
-                  <div className="tt-check-icon">
-                    {isMicAvailable ? <FaCheckCircle /> : <FaMicrophoneSlash />}
-                  </div>
-                  <div className="tt-check-text">
-                    <strong>3. Audio Proctoring Stream</strong>
-                    <span>
-                      {isMicAvailable ? "Microphone input detected & active" : "Microphone inactive or muted"}
-                    </span>
-                  </div>
-                </div>
+          <footer className="tt-instr-foot">
+            <button
+              className="btn btn-primary btn-lg"
+              disabled={!ready}
+              onClick={enterFullscreenAndStart}
+            >
+              <FaExpand /> Authorise fullscreen &amp; begin <FaChevronRight />
+            </button>
+            {!ready && (
+              <p className="tt-gate-note">
+                <FaExclamationTriangle />{" "}
+                {camStatus !== "active"
+                  ? "Enable your camera to unlock the exam."
+                  : engineLoading
+                  ? "Loading the face-detection model — this takes a few seconds on first run."
+                  : detection.faceCount > 1
+                  ? "More than one person is visible. Only the candidate may be in frame."
+                  : "Align your face with the centre guide to unlock the exam."}
+              </p>
+            )}
 
-                <div className="tt-check-card info">
-                  <div className="tt-check-icon">
-                    <FaLock />
-                  </div>
-                  <div className="tt-check-text">
-                    <strong>4. Full Screen Lockdown</strong>
-                    <span>Exam runs in locked fullscreen. Exiting or switching tabs logs violations.</span>
+            {engineUnavailable && camStatus === "active" && (
+              <div className="alert alert-warning tt-engine-warning">
+                <FaExclamationTriangle />
+                <div className="alert-body">
+                  <div className="alert-title">Face detection could not start</div>
+                  <div>
+                    Your camera is recording and fullscreen rules still apply, but
+                    automatic identity checks are off for this attempt. This is
+                    noted on your submission for the invigilator.
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-
-          {/* Rules list */}
-          <ul className="tt-rules">
-            <li>
-              <FaCheckCircle className="rule-icon ok" /> Keep your face centered inside the frame throughout the examination.
-            </li>
-            <li>
-              <FaExclamationTriangle className="rule-icon warn" /> Detection of multiple people or absence from camera will trigger immediate security strikes.
-            </li>
-            <li>
-              <FaExclamationTriangle className="rule-icon warn" /> Max 5 security strikes allowed before auto-disqualification.
-            </li>
-          </ul>
-
-          {/* Action Button */}
-          <div className="tt-action-footer">
-            <button
-              className={`tt-start-btn ${!isReadyToStart ? "btn-disabled" : ""}`}
-              disabled={!isReadyToStart}
-              onClick={enterFullscreenAndStart}
-            >
-              <FaExpand /> Authorize Fullscreen &amp; Begin Assessment <FaChevronRight />
-            </button>
-            {!isReadyToStart && (
-              <p className="tt-gating-note">
-                ⚠ You must enable your camera and align your face to unlock the assessment.
-              </p>
             )}
-          </div>
+          </footer>
         </div>
       </div>
     );
   }
 
-  /* ──────────────────────────────────────────────────────────
-     SCREEN 2: SUBMITTED RESULTS SCREEN
-  ────────────────────────────────────────────────────────── */
+  /* ══════════════════════════════════════════════════════════
+     SCREEN 2 — Results
+     ══════════════════════════════════════════════════════════ */
   if (phase === "submitted") {
-    const pct = Math.round((score / testMeta.totalMarks) * 100);
+    const pct = testMeta.totalMarks > 0
+      ? Math.round((score / testMeta.totalMarks) * 100)
+      : 0;
     const passed = pct >= 60;
-    const answeredCount = Object.keys(answers).length;
 
     return (
-      <div className="tt-submitted-screen">
+      <div className="tt-screen tt-submitted">
         <div className="tt-result-card">
-          <div className={`tt-result-icon ${passed ? "result-pass" : "result-fail"}`}>
+          <span className={`tt-result-icon ${passed ? "is-pass" : "is-fail"}`}>
             {passed ? <FaCheckCircle /> : <FaTimes />}
-          </div>
-          <h2>{passed ? "Assessment Submitted Successfully!" : "Assessment Completed"}</h2>
+          </span>
+
+          <h1>{passed ? "Assessment submitted" : "Assessment completed"}</h1>
           <p className="tt-result-sub">
-            Your answers and strict proctoring logs have been recorded and sent to the faculty.
+            Your answers and proctoring log have been recorded and sent to the faculty.
           </p>
 
-          <div className="tt-score-display">
-            <span className="tt-score-num" style={{ color: passed ? "#10b981" : "#ef4444" }}>
+          <div className="tt-score">
+            <span className={`tt-score-num ${passed ? "is-pass" : "is-fail"}`}>
               {Math.round(score)}
             </span>
-            <span className="tt-score-denom">/ {testMeta.totalMarks}</span>
+            <span className="tt-score-den">/ {testMeta.totalMarks}</span>
           </div>
-          <div className="tt-score-pct" style={{ color: passed ? "#10b981" : "#ef4444" }}>
-            {pct}% Score
-          </div>
+          <div className={`tt-score-pct ${passed ? "is-pass" : "is-fail"}`}>{pct}%</div>
 
-          <div className="tt-mini-bar-track">
+          <div className="progress-track tt-score-bar">
             <div
-              className="tt-mini-bar-fill"
-              style={{ width: `${pct}%`, background: passed ? "#10b981" : "#ef4444" }}
+              className={`progress-fill ${passed ? "is-success" : "is-danger"}`}
+              style={{ width: `${pct}%` }}
             />
           </div>
 
-          {/* Proctoring Trust Report */}
-          <div className="tt-proctor-summary-card">
-            <div className="tt-proctor-metric">
-              <span className="metric-label">Proctoring Trust Score</span>
-              <strong
-                className="metric-val"
-                style={{ color: trustScore >= 80 ? "#10b981" : trustScore >= 50 ? "#f59e0b" : "#ef4444" }}
-              >
-                {trustScore}%
-              </strong>
-            </div>
-            <div className="tt-proctor-metric">
-              <span className="metric-label">Security Strikes</span>
-              <strong className="metric-val" style={{ color: strikes === 0 ? "#10b981" : "#ef4444" }}>
-                {strikes} / {MAX_STRIKES}
-              </strong>
-            </div>
-            <div className="tt-proctor-metric">
-              <span className="metric-label">Logged Violations</span>
-              <strong className="metric-val">{violations.length}</strong>
-            </div>
+          <div className="tt-result-stats">
+            <ResultStat label="Answered" value={`${answeredCount}/${questions.length}`} />
+            <ResultStat
+              label="Correct"
+              value={questions.filter((q) => answers[q.id] === q.correct).length}
+            />
+            <ResultStat label="Trust score" value={`${trustScore}%`} />
+            <ResultStat label="Strikes" value={`${strikes}/${MAX_STRIKES}`} />
           </div>
 
-          <div className="tt-stat-row">
-            <div className="tt-stat">
-              <span>Answered</span>
-              <strong>
-                {answeredCount}/{questions.length}
-              </strong>
+          {violations.length > 0 && (
+            <div className="alert alert-warning tt-result-alert">
+              <FaShieldAlt />
+              <div className="alert-body">
+                <div className="alert-title">
+                  {violations.length} proctoring event{violations.length === 1 ? "" : "s"} logged
+                </div>
+                <div>These have been attached to your submission for faculty review.</div>
+              </div>
             </div>
-            <div className="tt-stat">
-              <span>Correct</span>
-              <strong>
-                {questions.filter((qItem) => answers[qItem.id] === qItem.correct).length}
-              </strong>
-            </div>
-            <div className="tt-stat">
-              <span>Fullscreen Status</span>
-              <strong style={{ color: "#10b981" }}>Validated</strong>
-            </div>
-          </div>
+          )}
 
-          <div className="tt-result-buttons">
-            <button className="tt-start-btn" onClick={() => navigate("/student")}>
-              <FaHome /> Student Dashboard
+          <div className="tt-result-actions">
+            <button className="btn btn-primary btn-lg" onClick={() => navigate("/student")}>
+              <FaHome /> Back to dashboard
             </button>
-            <button className="btn-secondary" onClick={() => navigate("/results")}>
-              View Analytics
+            <button className="btn btn-secondary btn-lg" onClick={() => navigate("/results")}>
+              <FaChartBar /> View analytics
             </button>
           </div>
         </div>
@@ -854,159 +855,123 @@ export default function TakeTest() {
     );
   }
 
-  /* ──────────────────────────────────────────────────────────
-     SCREEN 3: ACTIVE TEST WITH STRICT LOCKDOWN & REAL-TIME PROCTORING
-  ────────────────────────────────────────────────────────── */
+  /* ══════════════════════════════════════════════════════════
+     SCREEN 3 — Live exam
+     ══════════════════════════════════════════════════════════ */
   const q = questions[current] || questions[0];
-  const isMultiFace = detectionResult.status === "multi_face" || detectionResult.faceCount > 1;
-  const isNoFace = detectionResult.status === "no_face" || detectionResult.faceCount === 0;
+  const progressPct = ((current + 1) / questions.length) * 100;
 
   return (
-    <div className={`tt-test-screen ${isMultiFace ? "border-critical-alert" : ""}`}>
-      {/* ── Strict Fullscreen Lockdown Overlay Modal ── */}
+    <div className={`tt-screen tt-exam ${isMultiFace ? "is-alert" : ""}`}>
+      {/* Lockout overlays */}
       {fullscreenLockout && (
-        <div className="tt-fullscreen-lockout-overlay">
-          <div className="tt-lockout-modal">
-            <div className="tt-lockout-pulse-icon">
-              <FaLock />
+        <div className="tt-lockout">
+          <div className="tt-lockout-card">
+            <span className="tt-lockout-icon"><FaLock /></span>
+            <h2>Security lockdown</h2>
+            <p>{lockoutReason}</p>
+            <div className="tt-lockout-strike">
+              <span>Strike recorded</span>
+              <strong>{strikes} of {MAX_STRIKES}</strong>
             </div>
-            <h2>STRICT SECURITY LOCKDOWN</h2>
-            <p className="tt-lockout-msg">{lockoutReason || "Fullscreen mode was exited."}</p>
-
-            <div className="tt-lockout-strike-bar">
-              <span>Security Strike Incurred!</span>
-              <strong>
-                Strike {strikes} of {MAX_STRIKES}
-              </strong>
-            </div>
-
-            <div className="tt-lockout-warning-note">
-              ⚠ SmartAssess requires full screen lockdown throughout the test. Tab switching or exiting full
-              screen is strictly recorded for disciplinary audit.
-            </div>
-
-            <button className="btn-primary tt-resume-fs-btn" onClick={resumeFullscreen}>
-              <FaExpand /> Re-Enter Fullscreen &amp; Resume Test
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Stream Interruption / Lost Camera Modal ── */}
-      {camStatus === "stream_lost" && (
-        <div className="tt-fullscreen-lockout-overlay">
-          <div className="tt-lockout-modal">
-            <div className="tt-lockout-pulse-icon" style={{ background: "rgba(239, 68, 68, 0.2)", color: "#ef4444" }}>
-              <FaVideoSlash />
-            </div>
-            <h2>CAMERA FEED INTERRUPTED</h2>
-            <p className="tt-lockout-msg">
-              Continuous live camera access is strictly required to proctor this exam.
+            <p className="tt-lockout-note">
+              SmartAssess requires fullscreen throughout. Tab switching and fullscreen
+              exits are logged for review.
             </p>
-            <button className="btn-primary tt-resume-fs-btn" onClick={requestCameraAccess}>
-              <FaRedoAlt /> Reconnect Webcam
+            <button className="btn btn-primary btn-lg" onClick={resumeFullscreen}>
+              <FaExpand /> Re-enter fullscreen &amp; resume
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Top Header Navigation Bar ── */}
+      {camStatus === "stream_lost" && (
+        <div className="tt-lockout">
+          <div className="tt-lockout-card">
+            <span className="tt-lockout-icon is-danger"><FaVideoSlash /></span>
+            <h2>Camera feed interrupted</h2>
+            <p>Continuous camera access is required to proctor this exam.</p>
+            <button className="btn btn-primary btn-lg" onClick={requestCameraAccess}>
+              <FaRedoAlt /> Reconnect webcam
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <header className="tt-header">
         <div className="tt-header-left">
           <FaShieldAlt className="tt-header-shield" />
-          <div className="tt-title-group">
-            <div className="tt-header-title">{testMeta.title}</div>
-            <div className="tt-header-code">{testMeta.code}</div>
+          <div className="tt-header-titles">
+            <span className="tt-header-title">{testMeta.title}</span>
+            <span className="tt-header-code">{testMeta.code}</span>
           </div>
         </div>
 
-        <div className="tt-header-center">
-          <div className={`tt-timer ${timeLeft < 300 ? "timer-urgent" : ""}`}>
-            <FaClock /> {fmt(timeLeft)}
-          </div>
+        <div className={`tt-timer ${timeLeft < 300 ? "is-urgent" : ""}`}>
+          <FaClock /> <span className="tabular">{fmt(timeLeft)}</span>
         </div>
 
         <div className="tt-header-right">
-          {/* Proctoring Trust Pill */}
-          <div
-            className={`tt-trust-badge ${
-              trustScore >= 80 ? "trust-good" : trustScore >= 50 ? "trust-warn" : "trust-danger"
+          <span
+            className={`badge badge-lg ${
+              trustScore >= 80 ? "badge-success" : trustScore >= 50 ? "badge-warning" : "badge-danger"
             }`}
-            title="Integrity & Trust Score"
+            title="Integrity score"
           >
-            <FaShieldAlt /> {trustScore}% Trust
-          </div>
-
-          {/* Strikes Badge */}
-          <div className={`tt-strikes-badge ${strikes > 0 ? "strikes-alert" : ""}`}>
-            Strikes: {strikes}/{MAX_STRIKES}
-          </div>
-
-          <span className="tt-progress-text">
-            {answeredCount}/{questions.length} answered
+            <FaShieldAlt /> {trustScore}%
           </span>
-
-          <button className="tt-submit-btn" onClick={handleFinalSubmit}>
-            Submit Test
+          <span className={`badge badge-lg ${strikes > 0 ? "badge-danger" : "badge-neutral"}`}>
+            Strikes {strikes}/{MAX_STRIKES}
+          </span>
+          <span className="tt-progress-text">
+            {answeredCount}/{questions.length}
+          </span>
+          <button className="btn btn-primary btn-sm" onClick={handleFinalSubmit}>
+            Submit test
           </button>
         </div>
       </header>
 
-      {/* ── Floating Notification Toasts ── */}
-      <div className="tt-warnings-stack">
-        {floatingToasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`tt-warn-toast ${
-              toast.type === "critical" ? "toast-urgent" : "toast-warn"
-            }`}
-          >
-            <FaExclamationTriangle /> {toast.msg}
+      {/* Toasts */}
+      <div className="tt-toasts">
+        {toasts.map((t) => (
+          <div key={t.id} className={`tt-toast ${t.type === "critical" ? "is-critical" : "is-warn"}`}>
+            <FaExclamationTriangle /> {t.msg}
           </div>
         ))}
       </div>
 
-      {/* ── Main Examination Layout ── */}
       <div className="tt-layout">
-        {/* Left: Question Pane */}
+        {/* Question pane */}
         <main className="tt-question-pane">
-          {/* Progress bar */}
-          <div className="tt-progress-bar">
-            <div
-              className="tt-progress-fill"
-              style={{ width: `${((current + 1) / questions.length) * 100}%` }}
-            />
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${progressPct}%` }} />
           </div>
 
-          {/* Question Card */}
           <div className="tt-question-card">
             <div className="tt-q-meta">
-              <span className="tt-q-num">
-                Question {current + 1} of {questions.length}
-              </span>
+              <span className="tt-q-num">Question {current + 1} of {questions.length}</span>
               <button
-                className={`tt-flag-btn ${flagged.has(current) ? "flagged" : ""}`}
+                className={`btn btn-sm ${flagged.has(current) ? "btn-primary" : "btn-secondary"}`}
                 onClick={() =>
                   setFlagged((prev) => {
-                    const n = new Set(prev);
-                    n.has(current) ? n.delete(current) : n.add(current);
-                    return n;
+                    const next = new Set(prev);
+                    if (next.has(current)) next.delete(current);
+                    else next.add(current);
+                    return next;
                   })
                 }
-                title="Flag for review"
               >
                 <FaFlag /> {flagged.has(current) ? "Flagged" : "Flag"}
               </button>
             </div>
 
-            <h2 className="tt-question-text">{q.text}</h2>
+            <h2 className="tt-q-text">{q.text}</h2>
 
-            <div className="tt-options">
+            <div className="tt-options" role="radiogroup" aria-label="Answer options">
               {q.options.map((opt, i) => (
-                <label
-                  key={i}
-                  className={`tt-option ${answers[q.id] === i ? "selected" : ""}`}
-                >
+                <label key={i} className={`tt-option ${answers[q.id] === i ? "is-selected" : ""}`}>
                   <input
                     type="radio"
                     name={`q-${q.id}`}
@@ -1020,25 +985,25 @@ export default function TakeTest() {
             </div>
           </div>
 
-          {/* Navigation Controls */}
-          <div className="tt-nav-row">
+          <div className="tt-nav">
             <button
-              className="btn-secondary"
+              className="btn btn-secondary"
               disabled={current === 0}
-              onClick={() => setCurrent((p) => p - 1)}
+              onClick={() => setCurrent((p) => Math.max(0, p - 1))}
             >
               <FaChevronLeft /> Previous
             </button>
 
-            <div className="tt-q-dots">
+            <div className="tt-dots">
               {questions.map((sq, i) => (
                 <button
-                  key={i}
-                  className={`q-dot ${i === current ? "dot-current" : ""} ${
-                    answers[sq.id] !== undefined ? "dot-answered" : ""
-                  } ${flagged.has(i) ? "dot-flagged" : ""}`}
+                  key={sq.id}
+                  className={`tt-dot ${i === current ? "is-current" : ""} ${
+                    answers[sq.id] !== undefined ? "is-answered" : ""
+                  } ${flagged.has(i) ? "is-flagged" : ""}`}
                   onClick={() => setCurrent(i)}
-                  title={`Question ${i + 1}`}
+                  aria-label={`Go to question ${i + 1}`}
+                  aria-current={i === current}
                 >
                   {i + 1}
                 </button>
@@ -1046,181 +1011,83 @@ export default function TakeTest() {
             </div>
 
             {current < questions.length - 1 ? (
-              <button className="btn-primary" onClick={() => setCurrent((p) => p + 1)}>
+              <button className="btn btn-primary" onClick={() => setCurrent((p) => p + 1)}>
                 Next <FaChevronRight />
               </button>
             ) : (
-              <button className="btn-primary" onClick={handleFinalSubmit}>
-                Finish &amp; Submit
+              <button className="btn btn-success" onClick={handleFinalSubmit}>
+                Finish &amp; submit
               </button>
             )}
           </div>
         </main>
 
-        {/* Right: Proctoring Camera HUD + Palette + Violation Log */}
-        <aside className="tt-side-pane">
-          {/* Real-time Proctoring Camera Widget */}
-          <div className={`proctor-cam-widget ${camExpanded ? "cam-expanded" : ""}`}>
-            <div className="cam-titlebar">
-              <span className="cam-title">
-                <FaShieldAlt className="cam-shield-icon" /> AI Proctoring HUD
-              </span>
-              <div className="cam-controls">
+        {/* Proctoring pane */}
+        <aside className="tt-side">
+          <div className={`tt-cam-widget ${camExpanded ? "is-expanded" : ""}`}>
+            <div className="tt-cam-bar">
+              <span className="tt-cam-title"><FaShieldAlt /> AI proctoring</span>
+              <div className="tt-cam-controls">
                 <button
-                  className={`cam-ctrl-btn ${isMuted ? "cam-ctrl-red" : ""}`}
+                  className={`btn btn-icon ${isMuted ? "is-muted" : ""}`}
                   onClick={toggleMute}
-                  title={isMuted ? "Unmute microphone" : "Mute microphone"}
+                  disabled={!isMicAvailable}
+                  title={!isMicAvailable ? "No microphone" : isMuted ? "Unmute" : "Mute"}
+                  aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
                 >
                   {isMuted ? <FaMicrophoneSlash /> : <FaMicrophone />}
                 </button>
                 <button
-                  className="cam-ctrl-btn"
+                  className="btn btn-icon"
                   onClick={() => setCamExpanded((p) => !p)}
-                  title={camExpanded ? "Collapse" : "Expand"}
+                  aria-label={camExpanded ? "Collapse camera" : "Expand camera"}
                 >
                   {camExpanded ? <FaCompress /> : <FaExpand />}
                 </button>
               </div>
             </div>
 
-            <div className="cam-viewport">
-              <video
-                ref={videoRef}
-                className="cam-video"
-                muted
-                playsInline
-                autoPlay
-              />
-              <canvas ref={canvasRef} className="cam-hud-canvas" width={320} height={240} />
+            <div className="tt-viewport">
+              <video ref={videoRef} className="tt-video" muted playsInline autoPlay />
+              <canvas ref={canvasRef} className="tt-hud" />
 
-              {/* Dynamic Status Badges matching exact proctoring requirements */}
-              {isMultiFace ? (
-                <div className="cam-status-pill multi-face-alert">
-                  <FaUserFriends /> ⚠ Multiple faces detected.
-                </div>
-              ) : isNoFace ? (
-                <div className="cam-status-pill no-face-alert">
-                  <FaEye /> ⚠ Candidate not detected.
-                </div>
-              ) : (
-                <div className="cam-status-pill single-face-ok">
-                  <FaCheckCircle /> ✔ Candidate Verified (1 Face)
-                </div>
-              )}
+              <span
+                className={`tt-cam-status ${
+                  isMultiFace ? "is-critical" : isNoFace ? "is-warn" : "is-ok"
+                }`}
+              >
+                {isMultiFace ? <><FaUserFriends /> Multiple faces</>
+                  : isNoFace ? <><FaEye /> Not detected</>
+                  : <><FaCheckCircle /> Verified</>}
+              </span>
 
-              <span className="cam-live-badge">● LIVE PROCTOR</span>
+              <span className="tt-cam-live"><span className="dot dot-pulse" /> Live</span>
             </div>
 
-            <div className="cam-footer">
-              <span className={`cam-status-dot ${isMultiFace ? "dot-critical" : "dot-ok"}`} />
-              <span className="cam-footer-text">
-                {detectionResult.message || "Proctoring stream verified"}
-              </span>
+            <div className="tt-cam-foot">
+              <span className={`dot ${isMultiFace ? "is-critical" : "is-ok"}`} />
+              <span>{detection.message}</span>
             </div>
           </div>
 
-          {/* Interactive Simulation & Test Suite Toolbar (Developer / Tester feature) */}
-          <div className="tt-sim-toolbar">
-            <button
-              className="tt-sim-toggle-btn"
-              onClick={() => setShowSimPanel((p) => !p)}
-              title="Test multi-face and security alerts"
-            >
-              <FaBug /> Proctoring Test Suite {showSimPanel ? "▲" : "▼"}
-            </button>
-
-            {showSimPanel && (
-              <div className="tt-sim-drawer">
-                <span className="tt-sim-label">Simulate Security Events:</span>
-                <div className="tt-sim-btn-grid">
-                  <button
-                    className={`sim-btn ${simulationMode === "multi_face" ? "active-sim" : ""}`}
-                    onClick={() => {
-                      setSimulationMode(simulationMode === "multi_face" ? "none" : "multi_face");
-                    }}
-                  >
-                    👥 2nd Person Enters
-                  </button>
-                  <button
-                    className={`sim-btn ${simulationMode === "no_face" ? "active-sim" : ""}`}
-                    onClick={() => {
-                      setSimulationMode(simulationMode === "no_face" ? "none" : "no_face");
-                    }}
-                  >
-                    👤 Candidate Leaves
-                  </button>
-                  <button
-                    className={`sim-btn ${simulationMode === "look_away" ? "active-sim" : ""}`}
-                    onClick={() => {
-                      setSimulationMode(simulationMode === "look_away" ? "none" : "look_away");
-                    }}
-                  >
-                    👀 Looking Away
-                  </button>
-                  <button
-                    className="sim-btn sim-btn-danger"
-                    onClick={() => {
-                      setLockoutReason("Simulated Tab Switch / Fullscreen Exit violation");
-                      setFullscreenLockout(true);
-                      recordViolation("Tab Switch (Simulated)", "Candidate simulated switching away.", "critical");
-                    }}
-                  >
-                    🪟 Exit Fullscreen
-                  </button>
-                </div>
+          <div className="card">
+            <div className="card-head">
+              <div className="card-head-left">
+                <FaShieldAlt className="card-head-icon" />
+                <h3 className="card-title">Audit log ({violations.length})</h3>
               </div>
-            )}
-          </div>
-
-          {/* Question Palette Card */}
-          <div className="tt-palette-card">
-            <h4>Question Palette</h4>
-            <div className="tt-palette-grid">
-              {questions.map((sq, i) => (
-                <button
-                  key={i}
-                  className={`palette-btn ${i === current ? "pal-current" : ""} ${
-                    answers[sq.id] !== undefined ? "pal-answered" : ""
-                  } ${flagged.has(i) ? "pal-flagged" : ""}`}
-                  onClick={() => setCurrent(i)}
-                >
-                  {i + 1}
-                </button>
-              ))}
             </div>
-            <div className="tt-palette-legend">
-              <span>
-                <span className="legend-dot pal-answered" />
-                Answered
-              </span>
-              <span>
-                <span className="legend-dot pal-flagged" />
-                Flagged
-              </span>
-              <span>
-                <span className="legend-dot" />
-                Unanswered
-              </span>
-            </div>
-          </div>
-
-          {/* Real-time Security & Violation Audit Log */}
-          <div className="tt-audit-log-card">
-            <div className="audit-header">
-              <FaShieldAlt />
-              <h4>Security Audit Log ({violations.length})</h4>
-            </div>
-            <div className="audit-timeline">
+            <div className="card-body-flush tt-audit">
               {violations.length === 0 ? (
-                <div className="audit-empty">
-                  <FaCheckCircle className="audit-clean-icon" />
-                  <span>No security infractions recorded. Proctoring clean.</span>
+                <div className="tt-audit-clean">
+                  <FaCheckCircle />
+                  <span>No infractions recorded.</span>
                 </div>
               ) : (
-                violations.slice(0, 5).map((v) => (
-                  <div key={v.id} className={`audit-entry ${v.severity}`}>
-                    <span className="audit-time">{v.time}</span>
-                    <div className="audit-info">
+                violations.slice(0, 6).map((v) => (
+                  <div key={v.id} className={`tt-audit-row is-${v.severity}`}>
+                    <span className="tt-audit-time tabular">{v.time}</span>
+                    <div>
                       <strong>{v.title}</strong>
                       <p>{v.details}</p>
                     </div>
@@ -1229,8 +1096,83 @@ export default function TakeTest() {
               )}
             </div>
           </div>
+
+          {import.meta.env.DEV && (
+            <div className="card tt-sim">
+              <button className="tt-sim-toggle" onClick={() => setShowSimPanel((p) => !p)}>
+                <FaBug /> Proctoring test suite {showSimPanel ? "▲" : "▼"}
+              </button>
+              {showSimPanel && (
+                <div className="tt-sim-body">
+                  <p className="field-hint">Simulate security events (development only).</p>
+                  <div className="tt-sim-grid">
+                    {[
+                      { key: "multi_face", label: "2nd person" },
+                      { key: "no_face", label: "Candidate leaves" },
+                      { key: "look_away", label: "Looking away" },
+                    ].map((s) => (
+                      <button
+                        key={s.key}
+                        className={`btn btn-sm ${simulationMode === s.key ? "btn-primary" : "btn-secondary"}`}
+                        onClick={() =>
+                          setSimulationMode((m) => (m === s.key ? "none" : s.key))
+                        }
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                    <button
+                      className="btn btn-sm btn-danger-soft"
+                      onClick={() => {
+                        setLockoutReason("Simulated fullscreen exit.");
+                        setFullscreenLockout(true);
+                        recordViolation("Tab switch (simulated)", "Simulated navigation away.", "critical");
+                      }}
+                    >
+                      Exit fullscreen
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </aside>
       </div>
+    </div>
+  );
+}
+
+/* ── Local presentational helpers ───────────────────────────── */
+
+function Fact({ label, value }) {
+  return (
+    <div className="tt-fact">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function Check({ ok, optional, info, title, text }) {
+  const state = info ? "is-info" : ok ? "is-ok" : optional ? "is-pending" : "is-fail";
+  return (
+    <div className={`tt-check ${state}`}>
+      <span className="tt-check-icon">
+        {info ? <FaLock /> : ok ? <FaCheckCircle /> : optional ? <FaMicrophoneSlash /> : <FaTimes />}
+      </span>
+      <div>
+        <strong>{title}</strong>
+        <span>{text}</span>
+      </div>
+    </div>
+  );
+}
+
+function ResultStat({ label, value }) {
+  return (
+    <div className="tt-result-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }

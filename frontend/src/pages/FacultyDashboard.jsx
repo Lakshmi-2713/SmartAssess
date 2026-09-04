@@ -1,314 +1,331 @@
-import { useState, useEffect } from "react";
-import Sidebar from "../components/Sidebar";
-import Navbar from "../components/Navbar";
-import GradeSubmissionModal from "../components/GradeSubmissionModal";
+import { useState, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   FaFileAlt,
   FaCalendarAlt,
   FaUsers,
   FaClipboardCheck,
   FaPlus,
-  FaLock,
-  FaUserPlus,
   FaChalkboardTeacher,
   FaAward,
-  FaCheckCircle,
   FaEdit,
+  FaChartBar,
+  FaArrowRight,
+  FaShieldAlt,
 } from "react-icons/fa";
+import Sidebar from "../components/Sidebar";
+import Navbar from "../components/Navbar";
+import GradeSubmissionModal from "../components/GradeSubmissionModal";
+import ToastStack from "../components/ToastStack";
+import { useToasts } from "../hooks/useToasts";
+import { useTheme } from "../context/useTheme";
+import { getUser } from "../services/session";
 import {
   getStoredTests,
   getStoredSubmissions,
   saveStoredSubmissions,
   getStoredResults,
   saveStoredResults,
+  nextId,
 } from "../services/storage";
 import "../styles/faculty.css";
 
-const RECENT_ACTIVITIES = [
-  { id: 1, text: "New test 'Java Programming' created", time: "1 hour ago", icon: FaPlus },
-  { id: 2, text: "Test 'DBMS Fundamentals' published", time: "1 day ago", icon: FaLock },
-  { id: 3, text: "Evaluated 15 student submissions", time: "2 days ago", icon: FaClipboardCheck },
-  { id: 4, text: "New student batch registered", time: "3 days ago", icon: FaUserPlus },
+const RECENT_ACTIVITY = [
+  { id: 1, text: "Test “Java Programming Fundamentals” created", time: "1 hour ago", tone: "primary" },
+  { id: 2, text: "Test “DBMS Fundamentals” published", time: "1 day ago", tone: "green" },
+  { id: 3, text: "Evaluated 15 student submissions", time: "2 days ago", tone: "blue" },
+  { id: 4, text: "New student batch registered", time: "3 days ago", tone: "amber" },
 ];
 
-function FacultyDashboard() {
+const isPending = (s) => String(s?.status ?? "").includes("Pending");
+
+export default function FacultyDashboard() {
+  const navigate = useNavigate();
+  const toasts = useToasts();
+  const { userProfile } = useTheme();
+  const user = getUser() || {};
+
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [tests, setTests] = useState(() => getStoredTests());
+  // Lazy initialisers read storage once during mount instead of a
+  // setState-inside-effect that triggers a second render pass.
+  const [tests] = useState(() => getStoredTests());
   const [submissions, setSubmissions] = useState(() => getStoredSubmissions());
-  const [selectedSubmission, setSelectedSubmission] = useState(null);
+  const [selected, setSelected] = useState(null);
 
-  useEffect(() => {
-    setTests(getStoredTests());
-    setSubmissions(getStoredSubmissions());
-  }, []);
+  const facultyName = userProfile?.name || user.name || "Faculty";
 
-  const upcomingTests = tests.filter((t) => t.status !== "Draft");
+  const pendingCount = useMemo(
+    () => submissions.filter(isPending).length,
+    [submissions]
+  );
 
-  // Stats data for Faculty
-  const stats = [
-    { id: 1, title: "Total Tests", count: String(tests.length), icon: FaFileAlt, colorClass: "card-emerald" },
-    { id: 2, title: "Upcoming Tests", count: String(upcomingTests.length), icon: FaCalendarAlt, colorClass: "card-teal" },
-    { id: 3, title: "Students Enrolled", count: "156", icon: FaUsers, colorClass: "card-cyan" },
-    { id: 4, title: "Pending Evaluations", count: String(submissions.filter(s => s.status.includes("Pending")).length), icon: FaClipboardCheck, colorClass: "card-amber" },
-  ];
+  const upcoming = useMemo(
+    () => tests.filter((t) => t.status !== "Draft"),
+    [tests]
+  );
 
-  const handleGradeUpdate = (updatedSub) => {
-    const updatedSubs = submissions.map((s) =>
-      s.id === updatedSub.id
-        ? {
-            ...s,
-            score: `${updatedSub.totalScore} / 100`,
-            totalScore: updatedSub.totalScore,
-            status: "Graded & Published",
-            feedback: updatedSub.feedback,
-            questions: updatedSub.questions,
-          }
-        : s
-    );
-    setSubmissions(updatedSubs);
-    saveStoredSubmissions(updatedSubs);
+  const totalEnrolled = useMemo(
+    () => tests.reduce((sum, t) => sum + (Number(t.students) || 0), 0),
+    [tests]
+  );
 
-    // Sync to results list for student scorecard review
-    const results = getStoredResults();
-    const newResult = {
-      id: Date.now(),
-      title: updatedSub.testTitle || "Assessment",
-      test: updatedSub.testTitle || "Assessment",
-      subject: "Computer Science",
-      date: new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
-      score: `${updatedSub.totalScore}%`,
-      student: updatedSub.studentName || "Rahul Verma",
-      reviewer: "Dr. Johnson",
-    };
-    const updatedResults = [newResult, ...results.filter(r => r.title !== updatedSub.testTitle)];
-    saveStoredResults(updatedResults);
-  };
+  const handleGradeUpdate = useCallback(
+    (graded) => {
+      const updatedSubs = submissions.map((s) =>
+        s.id === graded.id
+          ? {
+              ...s,
+              // The denominator comes from the paper, not a hardcoded 100.
+              score: `${graded.totalScore} / ${graded.maxScore}`,
+              totalScore: graded.totalScore,
+              maxScore: graded.maxScore,
+              status: "Graded & Published",
+              feedback: graded.feedback,
+              questions: graded.questions,
+            }
+          : s
+      );
+
+      setSubmissions(updatedSubs);
+      saveStoredSubmissions(updatedSubs);
+
+      const percent =
+        graded.maxScore > 0
+          ? Math.round((graded.totalScore / graded.maxScore) * 100)
+          : 0;
+
+      const results = getStoredResults();
+      const newResult = {
+        id: nextId(),
+        testId: graded.testId,
+        title: graded.testTitle || "Assessment",
+        test: graded.testTitle || "Assessment",
+        subject: graded.subject || "Computer Science",
+        date: new Date().toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        }),
+        score: `${percent}%`,
+        percent,
+        student: graded.studentName,
+        studentEmail: graded.studentEmail,
+        reviewer: facultyName,
+      };
+
+      // Replace only THIS student's result for THIS test. Filtering by title
+      // alone wiped every other student's result for the same paper.
+      const withoutOld = results.filter(
+        (r) =>
+          !(
+            r.studentEmail === graded.studentEmail &&
+            (r.testId === graded.testId || r.title === graded.testTitle)
+          )
+      );
+      saveStoredResults([newResult, ...withoutOld]);
+
+      toasts.success(`Published ${graded.studentName}'s score (${percent}%).`);
+    },
+    [submissions, facultyName, toasts]
+  );
 
   return (
-    <div className="faculty-layout-container">
+    <div className="app-shell">
       <Sidebar mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      <ToastStack toasts={toasts.toasts} onDismiss={toasts.dismiss} />
 
-      <main className="faculty-main-content">
+      <div className="app-main">
         <Navbar
           title="Faculty Dashboard"
-          subtitle="Dr. Johnson • Computer Science Department"
+          subtitle={`${facultyName} · ${userProfile?.department || "Computer Science"}`}
           onToggleMobileSidebar={() => setMobileOpen(true)}
         />
 
-        <div className="faculty-dashboard-body">
-          {/* Distinct Role Header Banner for Faculty */}
-          <div className="role-badge-header faculty-mode">
-            <div className="flex items-center gap-3">
-              <FaChalkboardTeacher className="text-xl text-emerald-400" />
-              <div>
-                <span className="font-bold text-white text-base">FACULTY WORKSPACE</span>
-                <p className="text-xs text-slate-300">Test Creation, Automated Grading & Student Performance Oversight</p>
-              </div>
+        <div className="app-body">
+          {/* Hero */}
+          <section className="fac-hero">
+            <div className="fac-hero-text">
+              <span className="fac-hero-badge">
+                <FaChalkboardTeacher /> Faculty workspace
+              </span>
+              <h2 className="fac-hero-title">Good to see you, {facultyName.split(" ")[0]}.</h2>
+              <p className="fac-hero-sub">
+                {pendingCount > 0 ? (
+                  <>
+                    You have <strong>{pendingCount}</strong> submission
+                    {pendingCount === 1 ? "" : "s"} waiting for review.
+                  </>
+                ) : (
+                  <>Everything is graded. Nothing is waiting on you right now.</>
+                )}
+              </p>
             </div>
-            <span className="role-pill-tag">FACULTY PORTAL</span>
+            <div className="fac-hero-actions">
+              <button className="btn btn-primary" onClick={() => navigate("/tests")}>
+                <FaPlus /> Create test
+              </button>
+              <button className="btn btn-secondary" onClick={() => navigate("/results")}>
+                <FaChartBar /> View analytics
+              </button>
+            </div>
+          </section>
+
+          {/* Stats */}
+          <div className="stat-grid">
+            <Tile tone="tile-teal" icon={<FaFileAlt />} value={tests.length} label="Total tests" />
+            <Tile tone="tile-blue" icon={<FaCalendarAlt />} value={upcoming.length} label="Live & upcoming" />
+            <Tile tone="tile-indigo" icon={<FaUsers />} value={totalEnrolled} label="Enrolments" />
+            <Tile
+              tone={pendingCount > 0 ? "tile-amber" : "tile-green"}
+              icon={<FaClipboardCheck />}
+              value={pendingCount}
+              label="Pending evaluations"
+            />
           </div>
 
-          {/* STATS CARDS ROW */}
-          <div className="faculty-stats-grid">
-            {stats.map((st) => {
-              const IconComp = st.icon;
-              return (
-                <div key={st.id} className={`fac-stat-card ${st.colorClass}`}>
-                  <div className="stat-card-icon-wrap">
-                    <IconComp />
-                  </div>
-                  <div className="stat-card-info">
-                    <h3 className="stat-count">{st.count}</h3>
-                    <p className="stat-title">{st.title}</p>
+          {/* Submissions */}
+          <section className="card">
+              <div className="card-head">
+                <div className="card-head-left">
+                  <FaAward className="card-head-icon" />
+                  <div>
+                    <h3 className="card-title">Submissions for correction</h3>
+                    <p className="card-subtitle">
+                      {pendingCount} pending · {submissions.length} total
+                    </p>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-
-          {/* FEATURE 1 FOR FACULTY: Student Submissions Evaluation & Correction */}
-          <div className="fac-card pending-evaluations-card">
-            <div className="fac-card-header">
-              <div className="flex items-center gap-2">
-                <FaAward className="text-emerald-400" />
-                <h3 className="fac-card-title">Student Test Submissions for Correction</h3>
               </div>
-              <span className="badge-enrolled">{submissions.filter(s => s.status.includes("Pending")).length} Pending Review</span>
-            </div>
-            <div className="fac-card-body table-responsive">
-              <table className="fac-table">
-                <thead>
-                  <tr>
-                    <th>Student Name</th>
-                    <th>Test Title</th>
-                    <th>Date Submitted</th>
-                    <th>Current Score</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {submissions.map((sub) => (
-                    <tr key={sub.id}>
-                      <td className="font-semibold text-white">{sub.studentName}</td>
-                      <td className="text-slate-300">{sub.testTitle}</td>
-                      <td>{sub.date}</td>
-                      <td className="font-bold text-emerald-400">{sub.score}</td>
-                      <td>
-                        <span className={`status-pill ${sub.status.includes("Pending") ? "upcoming" : "published"}`}>
-                          {sub.status}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          className="btn-evaluate-sm"
-                          onClick={() => setSelectedSubmission(sub)}
-                        >
-                          <FaEdit /> Correct &amp; Grade
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
 
-          {/* ROW 1: Upcoming Tests & Recent Activities */}
-          <div className="faculty-grid-row">
-            {/* Upcoming Tests Table Card */}
-            <div className="fac-card upcoming-tests-card">
-              <div className="fac-card-header">
-                <h3 className="fac-card-title">Upcoming Assessments</h3>
-                <a href="/tests" className="fac-view-all">Manage Tests →</a>
-              </div>
-              <div className="fac-card-body table-responsive">
-                <table className="fac-table">
-                  <thead>
-                    <tr>
-                      <th>Test Title</th>
-                      <th>Date</th>
-                      <th>Time</th>
-                      <th>Enrolled</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {upcomingTests.slice(0, 5).map((t) => (
-                      <tr key={t.id}>
-                        <td className="font-semibold text-emerald-400">{t.title}</td>
-                        <td>{t.date || "20 May 2025"}</td>
-                        <td>{t.duration} Mins</td>
-                        <td><span className="badge-enrolled">{t.students || 40} Students</span></td>
+              <div className="table-wrap">
+                {submissions.length === 0 ? (
+                  <div className="empty-state">
+                    <span className="empty-icon"><FaClipboardCheck /></span>
+                    <p className="empty-title">No submissions yet</p>
+                    <p className="empty-text">
+                      Student attempts will appear here as they finish their tests.
+                    </p>
+                  </div>
+                ) : (
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Student</th>
+                        <th>Assessment</th>
+                        <th>Submitted</th>
+                        <th>Score</th>
+                        <th>Status</th>
+                        <th className="td-actions">Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {submissions.map((s) => {
+                        const pending = isPending(s);
+                        return (
+                          <tr key={s.id}>
+                            <td>
+                              <div className="cell-user">
+                                <span className="avatar avatar-sm avatar-student">
+                                  {initials(s.studentName)}
+                                </span>
+                                <span className="cell-user-text">
+                                  <span className="cell-user-name">{s.studentName}</span>
+                                  <span className="cell-user-sub">{s.studentEmail}</span>
+                                </span>
+                              </div>
+                            </td>
+                            <td className="td-clip" title={s.testTitle}>{s.testTitle}</td>
+                            <td className="text-sm text-muted" style={{ whiteSpace: "nowrap" }}>{s.date}</td>
+                            <td className="td-strong tabular">{s.score}</td>
+                            <td>
+                              <span className={`badge ${pending ? "badge-warning" : "badge-success"}`}>
+                                {pending ? "Pending" : "Published"}
+                              </span>
+                            </td>
+                            <td className="td-actions">
+                              <button
+                                className={`btn btn-sm ${pending ? "btn-primary" : "btn-secondary"}`}
+                                onClick={() => setSelected(s)}
+                              >
+                                <FaEdit /> {pending ? "Grade" : "Review"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
             </div>
+          </section>
 
-            {/* Recent Activities List Card */}
-            <div className="fac-card recent-activities-card">
-              <div className="fac-card-header">
-                <h3 className="fac-card-title">Recent Activity Logs</h3>
-              </div>
-              <div className="fac-card-body">
-                <div className="activity-list">
-                  {RECENT_ACTIVITIES.map((act) => {
-                    const ActIcon = act.icon;
-                    return (
-                      <div key={act.id} className="activity-item">
-                        <div className="activity-icon-badge">
-                          <ActIcon />
-                        </div>
-                        <div className="activity-text-wrap">
-                          <p className="activity-desc">{act.text}</p>
-                          <span className="activity-time">{act.time}</span>
-                        </div>
+          {/* Summary row */}
+          <div className="grid-2">
+              <section className="card">
+                <div className="card-head">
+                  <div className="card-head-left">
+                    <FaCalendarAlt className="card-head-icon" />
+                    <h3 className="card-title">Scheduled assessments</h3>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => navigate("/tests")}>
+                    All <FaArrowRight />
+                  </button>
+                </div>
+                <div className="card-body-flush">
+                  {upcoming.slice(0, 5).map((t) => (
+                    <div key={t.id} className="fac-test-row">
+                      <div className="fac-test-info">
+                        <strong>{t.title}</strong>
+                        <span>
+                          {t.subject} · {t.duration} min · {t.marks} marks
+                        </span>
                       </div>
-                    );
-                  })}
+                      <span
+                        className={`badge ${
+                          t.status === "Published" ? "badge-success" : "badge-info"
+                        }`}
+                      >
+                        {t.status}
+                      </span>
+                    </div>
+                  ))}
+                  {upcoming.length === 0 && (
+                    <div className="empty-state">
+                      <p className="empty-text">No scheduled assessments.</p>
+                    </div>
+                  )}
                 </div>
-              </div>
-            </div>
-          </div>
+              </section>
 
-          {/* ROW 2: Tests Overview (Donut Chart) & Performance Overview (Line Chart) */}
-          <div className="faculty-grid-row">
-            {/* Tests Overview Donut Chart */}
-            <div className="fac-card tests-overview-card">
-              <div className="fac-card-header">
-                <h3 className="fac-card-title">Tests Status Overview</h3>
-              </div>
-              <div className="fac-card-body donut-chart-container">
-                <div className="donut-chart-svg-wrap">
-                  <svg viewBox="0 0 100 100" className="donut-svg">
-                    <circle cx="50" cy="50" r="38" fill="transparent" stroke="#10b981" strokeWidth="16" strokeDasharray="114 125" strokeDashoffset="0" />
-                    <circle cx="50" cy="50" r="38" fill="transparent" stroke="#06b6d4" strokeWidth="16" strokeDasharray="76 163" strokeDashoffset="-114" />
-                    <circle cx="50" cy="50" r="38" fill="transparent" stroke="#64748b" strokeWidth="16" strokeDasharray="48 191" strokeDashoffset="-190" />
-                  </svg>
-                </div>
-                <div className="chart-legend-list">
-                  <div className="legend-item">
-                    <span className="legend-dot published-dot"></span>
-                    <span className="legend-label">Published</span>
-                    <span className="legend-val">12</span>
-                  </div>
-                  <div className="legend-item">
-                    <span className="legend-dot upcoming-dot"></span>
-                    <span className="legend-label">Upcoming</span>
-                    <span className="legend-val">8</span>
-                  </div>
-                  <div className="legend-item">
-                    <span className="legend-dot draft-dot"></span>
-                    <span className="legend-label">Draft</span>
-                    <span className="legend-val">5</span>
+              <section className="card">
+                <div className="card-head">
+                  <div className="card-head-left">
+                    <FaShieldAlt className="card-head-icon" />
+                    <h3 className="card-title">Recent activity</h3>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            {/* Performance Overview Line Chart */}
-            <div className="fac-card performance-overview-card">
-              <div className="fac-card-header">
-                <h3 className="fac-card-title">Class Average Score Trend</h3>
-              </div>
-              <div className="fac-card-body line-chart-container">
-                <div className="line-chart-svg-wrap">
-                  <svg viewBox="0 0 500 200" className="line-chart-svg">
-                    <line x1="40" y1="30" x2="480" y2="30" stroke="#273552" strokeWidth="1" />
-                    <line x1="40" y1="75" x2="480" y2="75" stroke="#273552" strokeWidth="1" />
-                    <line x1="40" y1="120" x2="480" y2="120" stroke="#273552" strokeWidth="1" />
-                    <line x1="40" y1="165" x2="480" y2="165" stroke="#273552" strokeWidth="1" />
-                    <text x="10" y="35" fill="#94a3b8" fontSize="10">100%</text>
-                    <text x="15" y="78" fill="#94a3b8" fontSize="10">75%</text>
-                    <text x="15" y="123" fill="#94a3b8" fontSize="10">50%</text>
-                    <text x="15" y="168" fill="#94a3b8" fontSize="10">25%</text>
-
-                    <path d="M 60 110 L 150 140 L 250 85 L 350 100 L 450 55" fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" />
-                    <circle cx="60" cy="110" r="5" fill="#10b981" stroke="#141c2e" strokeWidth="2" />
-                    <circle cx="150" cy="140" r="5" fill="#10b981" stroke="#141c2e" strokeWidth="2" />
-                    <circle cx="250" cy="85" r="5" fill="#10b981" stroke="#141c2e" strokeWidth="2" />
-                    <circle cx="350" cy="100" r="5" fill="#10b981" stroke="#141c2e" strokeWidth="2" />
-                    <circle cx="450" cy="55" r="5" fill="#10b981" stroke="#141c2e" strokeWidth="2" />
-
-                    <text x="50" y="190" fill="#94a3b8" fontSize="11">Jan</text>
-                    <text x="140" y="190" fill="#94a3b8" fontSize="11">Feb</text>
-                    <text x="240" y="190" fill="#94a3b8" fontSize="11">Mar</text>
-                    <text x="340" y="190" fill="#94a3b8" fontSize="11">Apr</text>
-                    <text x="440" y="190" fill="#94a3b8" fontSize="11">May</text>
-                  </svg>
+                <div className="card-body">
+                  <ul className="fac-activity">
+                    {RECENT_ACTIVITY.map((a) => (
+                      <li key={a.id}>
+                        <span className={`fac-activity-dot tone-${a.tone}`} />
+                        <div>
+                          <p>{a.text}</p>
+                          <span>{a.time}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-              </div>
-            </div>
+              </section>
           </div>
         </div>
-      </main>
+      </div>
 
-      {/* Grade Submission Modal for Faculty */}
-      {selectedSubmission && (
+      {selected && (
         <GradeSubmissionModal
-          submission={selectedSubmission}
-          onClose={() => setSelectedSubmission(null)}
+          submission={selected}
+          onClose={() => setSelected(null)}
           onSaveGrade={handleGradeUpdate}
         />
       )}
@@ -316,4 +333,19 @@ function FacultyDashboard() {
   );
 }
 
-export default FacultyDashboard;
+function initials(name) {
+  if (!name) return "??";
+  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join("").toUpperCase();
+}
+
+function Tile({ tone, icon, value, label }) {
+  return (
+    <div className={`stat-tile ${tone}`}>
+      <span className="stat-tile-icon">{icon}</span>
+      <div className="stat-tile-body">
+        <span className="stat-value">{value}</span>
+        <span className="stat-label">{label}</span>
+      </div>
+    </div>
+  );
+}

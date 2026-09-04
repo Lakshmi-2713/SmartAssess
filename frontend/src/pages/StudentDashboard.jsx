@@ -1,16 +1,10 @@
-import React, { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import Sidebar from "../components/Sidebar";
-import Navbar from "../components/Navbar";
-import ScorecardReviewModal from "../components/ScorecardReviewModal";
-import { useTheme } from "../context/ThemeContext";
 import {
-  FaUserGraduate,
   FaClipboardList,
   FaCheckCircle,
   FaClock,
   FaCalendarAlt,
-  FaChartLine,
   FaTrophy,
   FaShieldAlt,
   FaVideo,
@@ -22,15 +16,18 @@ import {
   FaAward,
   FaBullhorn,
   FaBookOpen,
-  FaCheck,
-  FaExclamationCircle,
   FaGraduationCap,
-  FaArrowRight,
   FaCode,
   FaDatabase,
   FaLayerGroup,
   FaLaptopCode,
+  FaSyncAlt,
 } from "react-icons/fa";
+import Sidebar from "../components/Sidebar";
+import Navbar from "../components/Navbar";
+import ScorecardReviewModal from "../components/ScorecardReviewModal";
+import { useTheme } from "../context/useTheme";
+import { getUser } from "../services/session";
 import {
   getStoredTests,
   getStoredSubmissions,
@@ -51,570 +48,478 @@ const SUBJECT_ICONS = {
 const ANNOUNCEMENTS = [
   {
     id: 1,
-    title: "Mid-Term Examination Schedule Released",
+    title: "Mid-term examination schedule released",
     author: "Dr. Johnson (Dept. Chair)",
-    time: "Today, 10:00 AM",
-    content: "The official schedule for 4th Semester Midterms is now live. Ensure your proctoring setup is tested prior to exam time.",
+    time: "Today, 10:00",
+    content:
+      "The official schedule for 4th-semester midterms is live. Test your proctoring setup before your exam slot.",
     urgent: true,
   },
   {
     id: 2,
-    title: "Java Programming Assessment Re-attempt Policy",
+    title: "Re-attempt policy for Java assessment",
     author: "Examination Cell",
     time: "Yesterday",
-    content: "Students who experienced connectivity anomalies during the mock session may submit requests to the department coordinator.",
+    content:
+      "Students who hit connectivity issues during the mock session may request a re-attempt from the coordinator.",
     urgent: false,
   },
   {
     id: 3,
-    title: "AI Proctoring System Update 3.4",
-    author: "SmartAssess Tech Support",
+    title: "AI proctoring update 3.4",
+    author: "SmartAssess Support",
     time: "2 days ago",
-    content: "Ensure camera permissions are enabled in your browser. Dual-monitor configurations are strictly prohibited during live assessments.",
+    content:
+      "Enable camera permissions before your exam. Dual-monitor setups are not permitted during live assessments.",
     urgent: false,
   },
 ];
 
-function StudentDashboard() {
+const READINESS = [
+  { key: "camera", icon: <FaVideo />, label: "Camera", hint: "Required for face verification" },
+  { key: "mic", icon: <FaMicrophone />, label: "Microphone", hint: "Used for audio proctoring" },
+  { key: "screen", icon: <FaDesktop />, label: "Display", hint: "Single-monitor, fullscreen capable" },
+  { key: "network", icon: <FaWifi />, label: "Network", hint: "Stable connection detected" },
+];
+
+export default function StudentDashboard() {
   const navigate = useNavigate();
   const { userProfile } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Stored state synced across application
-  const [tests, setTests] = useState([]);
-  const [submissions, setSubmissions] = useState([]);
-  const [results, setResults] = useState([]);
+  const [tests] = useState(() => getStoredTests());
+  const [submissions] = useState(() => getStoredSubmissions());
+  const [results] = useState(() => getStoredResults());
 
-  // Active filter tab for assessments
-  const [assessmentFilter, setAssessmentFilter] = useState("ALL");
-  const [selectedScorecardResult, setSelectedScorecardResult] = useState(null);
+  const [filter, setFilter] = useState("ALL");
+  const [scorecard, setScorecard] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [checkedAt, setCheckedAt] = useState(null);
 
-  // System readiness checker states
-  const [cameraChecked, setCameraChecked] = useState(true);
-  const [micChecked, setMicChecked] = useState(true);
-  const [screenChecked, setScreenChecked] = useState(true);
-  const [networkChecked, setNetworkChecked] = useState(true);
-  const [testingHardware, setTestingHardware] = useState(false);
+  const user = getUser() || {};
+  const studentName = userProfile?.name || user.name || "Student";
+  const studentEmail = (userProfile?.email || user.email || "").toLowerCase();
+  const studentDept = userProfile?.department || user.department || "Computer Science";
 
-  const storedUser = useMemo(() => {
-    try {
-      const user = localStorage.getItem("user");
-      return user ? JSON.parse(user) : {};
-    } catch {
-      return {};
-    }
-  }, []);
+  /**
+   * Only THIS student's records. Previously every student's results counted
+   * toward completion, so tests other people had finished showed as done and
+   * could not be started.
+   */
+  const myResults = useMemo(
+    () =>
+      results.filter(
+        (r) =>
+          (r.studentEmail || "").toLowerCase() === studentEmail ||
+          (!r.studentEmail && r.student === studentName)
+      ),
+    [results, studentEmail, studentName]
+  );
 
-  const studentName = userProfile?.name || storedUser.name || "Rahul Verma";
-  const studentEmail = userProfile?.email || storedUser.email || "rahul.verma@student.com";
-  const studentDept = userProfile?.department || storedUser.department || "Computer Science & Engineering";
+  const mySubmissions = useMemo(
+    () =>
+      submissions.filter(
+        (s) =>
+          (s.studentEmail || "").toLowerCase() === studentEmail ||
+          (!s.studentEmail && s.studentName === studentName)
+      ),
+    [submissions, studentEmail, studentName]
+  );
 
-  useEffect(() => {
-    setTests(getStoredTests());
-    setSubmissions(getStoredSubmissions());
-    setResults(getStoredResults());
-  }, []);
+  /** Completion is keyed on testId — title matching was fragile and wrong. */
+  const completedTestIds = useMemo(() => {
+    const ids = new Set();
+    for (const r of myResults) if (r.testId != null) ids.add(String(r.testId));
+    for (const s of mySubmissions) if (s.testId != null) ids.add(String(s.testId));
+    return ids;
+  }, [myResults, mySubmissions]);
 
-  // Compute test status mapping (whether student has already taken it)
-  const completedTestTitles = useMemo(() => {
-    const fromResults = results.map((r) => r.title || r.test);
-    const fromSubs = submissions.map((s) => s.testTitle);
-    return new Set([...fromResults, ...fromSubs]);
-  }, [results, submissions]);
+  const isCompleted = (test) => completedTestIds.has(String(test.id));
 
-  // Filtered Assessments
+  const availableTests = useMemo(
+    () => tests.filter((t) => t.status !== "Draft" && !isCompleted(t)),
+    [tests, completedTestIds] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const filteredTests = useMemo(() => {
-    if (assessmentFilter === "ALL") return tests;
-    if (assessmentFilter === "AVAILABLE") {
-      return tests.filter((t) => t.status !== "Draft" && !completedTestTitles.has(t.title));
-    }
-    if (assessmentFilter === "COMPLETED") {
-      return tests.filter((t) => completedTestTitles.has(t.title));
-    }
-    if (assessmentFilter === "UPCOMING") {
-      return tests.filter((t) => t.status === "Upcoming" && !completedTestTitles.has(t.title));
-    }
+    if (filter === "AVAILABLE") return availableTests;
+    if (filter === "COMPLETED") return tests.filter(isCompleted);
     return tests;
-  }, [tests, assessmentFilter, completedTestTitles]);
+  }, [tests, filter, availableTests, completedTestIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Next imminent test to take
-  const nextAvailableTest = useMemo(() => {
-    return tests.find((t) => t.status !== "Draft" && !completedTestTitles.has(t.title)) || tests[0];
-  }, [tests, completedTestTitles]);
+  const nextTest = availableTests[0] || null;
 
-  // Subject Mastery Breakdown
-  const subjectMastery = [
-    { subject: "Java Programming", score: 95, grade: "A+", status: "Mastery", color: "#10b981" },
-    { subject: "DBMS Fundamentals", score: 88, grade: "A", status: "Advanced", color: "#6366f1" },
-    { subject: "Data Structures & Algorithms", score: 85, grade: "A", status: "Advanced", color: "#38bdf8" },
-    { subject: "Operating Systems", score: 85, grade: "A", status: "Advanced", color: "#818cf8" },
-    { subject: "Python Programming", score: 80, grade: "B+", status: "Proficient", color: "#f59e0b" },
-    { subject: "Web Development", score: 78, grade: "B+", status: "Proficient", color: "#ec4899" },
-  ];
+  const averageScore = useMemo(() => {
+    const scored = myResults
+      .map((r) => (Number.isFinite(r.percent) ? r.percent : Number.parseFloat(r.score)))
+      .filter((n) => Number.isFinite(n));
+    if (scored.length === 0) return null;
+    return Math.round(scored.reduce((a, b) => a + b, 0) / scored.length);
+  }, [myResults]);
 
-  // Run hardware verification
-  const handleRunSystemCheck = () => {
-    setTestingHardware(true);
+  const mastery = useMemo(() => {
+    const bySubject = new Map();
+    for (const r of myResults) {
+      const pct = Number.isFinite(r.percent) ? r.percent : Number.parseFloat(r.score);
+      if (!Number.isFinite(pct)) continue;
+      const key = r.subject || "General";
+      const entry = bySubject.get(key) || { total: 0, count: 0 };
+      entry.total += pct;
+      entry.count += 1;
+      bySubject.set(key, entry);
+    }
+    return Array.from(bySubject.entries())
+      .map(([subject, { total, count }]) => ({
+        subject,
+        score: Math.round(total / count),
+      }))
+      .sort((a, b) => b.score - a.score);
+  }, [myResults]);
+
+  const openScorecard = (test) => {
+    const result =
+      myResults.find((r) => String(r.testId) === String(test.id)) || {
+        title: test.title,
+        test: test.title,
+        subject: test.subject,
+        date: test.date,
+        score: "—",
+        student: studentName,
+      };
+    const submission = mySubmissions.find((s) => String(s.testId) === String(test.id));
+    setScorecard({ result, submission });
+  };
+
+  const startTest = (test) => {
+    navigate(`/take-test?testId=${test.id}`);
+  };
+
+  const runSystemCheck = () => {
+    setChecking(true);
     setTimeout(() => {
-      setCameraChecked(true);
-      setMicChecked(true);
-      setScreenChecked(true);
-      setNetworkChecked(true);
-      setTestingHardware(false);
-    }, 1200);
-  };
-
-  const handleStartTest = (testObj) => {
-    localStorage.setItem("smartassess_active_test", JSON.stringify(testObj));
-    navigate(`/take-test?testId=${testObj.id}`);
-  };
-
-  const handleOpenScorecard = (testTitle) => {
-    const matchedResult = results.find((r) => (r.title || r.test) === testTitle) || {
-      id: Date.now(),
-      title: testTitle,
-      test: testTitle,
-      subject: "Computer Science",
-      date: "Recent Session",
-      score: "85%",
-      student: studentName,
-      reviewer: "Dr. Johnson",
-    };
-    setSelectedScorecardResult(matchedResult);
+      setChecking(false);
+      setCheckedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    }, 1100);
   };
 
   return (
-    <div className="student-layout-container">
+    <div className="app-shell">
       <Sidebar mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
 
-      <main className="student-main-content">
+      <div className="app-main">
         <Navbar
-          title="Student Learning Portal"
-          subtitle={`${studentName} • B.Tech ${studentDept} • 4th Semester`}
+          title="Student Portal"
+          subtitle={`${studentName} · ${studentDept}`}
           onToggleMobileSidebar={() => setMobileOpen(true)}
         />
 
-        <div className="student-dashboard-body">
-          {/* ── HERO BANNER ────────────────────────────────────────── */}
-          <div className="student-hero-banner">
-            <div className="hero-content-col">
-              <div className="hero-badge-pill">
-                <span className="hero-pulse-dot"></span>
-                <span>4th Semester • Academic Session 2024-2025</span>
-              </div>
-              <h1 className="hero-student-greeting">
-                Welcome back, <span>{studentName}</span>! 👋
-              </h1>
-              <p className="hero-student-desc">
-                Your AI-proctored examination environment is active. You have{" "}
-                <strong>{tests.filter((t) => t.status !== "Draft" && !completedTestTitles.has(t.title)).length} assessments</strong>{" "}
-                scheduled for completion this term.
+        <div className="app-body">
+          {/* Hero */}
+          <section className="std-hero">
+            <div className="std-hero-left">
+              <span className="std-hero-badge">
+                <span className="dot dot-pulse" /> Academic session 2024–25
+              </span>
+              <h2 className="std-hero-title">
+                Welcome back, <span>{studentName.split(" ")[0]}</span>
+              </h2>
+              <p className="std-hero-text">
+                {availableTests.length > 0 ? (
+                  <>
+                    You have <strong>{availableTests.length}</strong> assessment
+                    {availableTests.length === 1 ? "" : "s"} left to complete this term.
+                  </>
+                ) : (
+                  <>You&apos;re all caught up — no assessments are pending.</>
+                )}
               </p>
-              <div className="hero-student-meta">
-                <div className="meta-badge-item">
-                  <FaGraduationCap className="meta-icon" />
-                  <span>Roll No: <strong>CSE-2022-084</strong></span>
-                </div>
-                <div className="meta-badge-item">
-                  <FaShieldAlt className="meta-icon text-emerald" />
-                  <span>AI Proctor Status: <strong>Verified &amp; Clean</strong></span>
-                </div>
-                <div className="meta-badge-item">
-                  <FaBookOpen className="meta-icon text-blue" />
-                  <span>Department: <strong>{studentDept}</strong></span>
-                </div>
+
+              <div className="std-hero-meta">
+                <span className="std-meta-chip">
+                  <FaGraduationCap /> Roll no: <strong>{user.rollNumber || "CSE-2022-084"}</strong>
+                </span>
+                <span className="std-meta-chip">
+                  <FaShieldAlt /> Proctor status: <strong>Clear</strong>
+                </span>
+                <span className="std-meta-chip">
+                  <FaBookOpen /> <strong>{studentDept}</strong>
+                </span>
               </div>
             </div>
 
-            {nextAvailableTest && (
-              <div className="hero-cta-card">
-                <div className="cta-card-header">
-                  <span className="cta-live-tag">● NEXT SCHEDULED EXAM</span>
-                  <span className="cta-subject-badge">{nextAvailableTest.subject}</span>
+            {nextTest && (
+              <div className="std-hero-cta">
+                <div className="std-cta-head">
+                  <span className="std-cta-tag">
+                    <span className="dot dot-pulse" /> Next up
+                  </span>
+                  <span className="badge badge-primary">{nextTest.subject}</span>
                 </div>
-                <h3 className="cta-test-title">{nextAvailableTest.title}</h3>
-                <div className="cta-test-details">
-                  <span><FaClock /> {nextAvailableTest.duration} Minutes</span>
-                  <span><FaAward /> {nextAvailableTest.marks} Total Marks</span>
-                  <span><FaCalendarAlt /> {nextAvailableTest.date}</span>
+                <h3 className="std-cta-title">{nextTest.title}</h3>
+                <div className="std-cta-details">
+                  <span><FaClock /> {nextTest.duration} min</span>
+                  <span><FaAward /> {nextTest.marks} marks</span>
+                  <span><FaCalendarAlt /> {nextTest.date}</span>
                 </div>
-                <button
-                  className="btn-hero-launch-exam"
-                  onClick={() => handleStartTest(nextAvailableTest)}
-                >
-                  <FaPlay /> Start Assessment Now
+                <button className="btn btn-primary btn-block" onClick={() => startTest(nextTest)}>
+                  <FaPlay /> Start assessment
                 </button>
               </div>
             )}
-          </div>
+          </section>
 
-          {/* ── STATS KPI CARDS ────────────────────────────────────── */}
-          <div className="student-stats-grid">
-            <div className="std-stat-card card-indigo">
-              <div className="stat-card-icon-wrap">
-                <FaTrophy />
-              </div>
-              <div className="stat-card-body-wrap">
-                <div className="stat-count">8.8<span className="stat-denom">/10</span></div>
-                <div className="stat-title">Overall CGPA (Grade A+)</div>
-                <span className="stat-trend-tag positive">+4.2% from last term</span>
+          {/* Stats */}
+          <div className="stat-grid">
+            <div className="stat-tile tile-indigo">
+              <span className="stat-tile-icon"><FaTrophy /></span>
+              <div className="stat-tile-body">
+                <span className="stat-value">
+                  {averageScore !== null ? `${averageScore}%` : "—"}
+                </span>
+                <span className="stat-label">Average score</span>
               </div>
             </div>
-
-            <div className="std-stat-card card-emerald">
-              <div className="stat-card-icon-wrap">
-                <FaClipboardList />
-              </div>
-              <div className="stat-card-body-wrap">
-                <div className="stat-count">{completedTestTitles.size}</div>
-                <div className="stat-title">Assessments Completed</div>
-                <span className="stat-trend-tag neutral">All Evaluations Synced</span>
+            <div className="stat-tile tile-green">
+              <span className="stat-tile-icon"><FaCheckCircle /></span>
+              <div className="stat-tile-body">
+                <span className="stat-value">{completedTestIds.size}</span>
+                <span className="stat-label">Assessments completed</span>
               </div>
             </div>
-
-            <div className="std-stat-card card-blue">
-              <div className="stat-card-icon-wrap">
-                <FaClock />
-              </div>
-              <div className="stat-card-body-wrap">
-                <div className="stat-count">
-                  {tests.filter((t) => t.status !== "Draft" && !completedTestTitles.has(t.title)).length}
-                </div>
-                <div className="stat-title">Pending / Scheduled Exams</div>
-                <span className="stat-trend-tag active">Ready for Proctoring</span>
+            <div className="stat-tile tile-blue">
+              <span className="stat-tile-icon"><FaClock /></span>
+              <div className="stat-tile-body">
+                <span className="stat-value">{availableTests.length}</span>
+                <span className="stat-label">Pending assessments</span>
               </div>
             </div>
-
-            <div className="std-stat-card card-purple">
-              <div className="stat-card-icon-wrap">
-                <FaShieldAlt />
-              </div>
-              <div className="stat-card-body-wrap">
-                <div className="stat-count">99.4%</div>
-                <div className="stat-title">AI Integrity Compliance</div>
-                <span className="stat-trend-tag positive">0 Infractions Flagged</span>
+            <div className="stat-tile tile-teal">
+              <span className="stat-tile-icon"><FaShieldAlt /></span>
+              <div className="stat-tile-body">
+                <span className="stat-value">
+                  {mySubmissions.reduce(
+                    (n, s) => n + (s.proctoring?.totalStrikes || 0),
+                    0
+                  )}
+                </span>
+                <span className="stat-label">Integrity flags</span>
               </div>
             </div>
           </div>
 
-          {/* ── MAIN 2-COLUMN SECTION: ASSESSMENTS & READINESS ─────── */}
-          <div className="student-grid-row">
-            {/* COLUMN 1: ASSESSMENTS LAUNCHPAD */}
-            <div className="std-card">
-              <div className="std-card-header">
-                <div className="card-header-left">
-                  <FaClipboardList className="card-header-icon text-indigo" />
-                  <h3 className="std-card-title">Assessments Launchpad</h3>
+          <div className="split-main">
+            {/* Assessments */}
+            <section className="card">
+              <div className="card-head">
+                <div className="card-head-left">
+                  <FaClipboardList className="card-head-icon" />
+                  <h3 className="card-title">Your assessments</h3>
                 </div>
-
-                <div className="std-filter-pills">
-                  <button
-                    className={`std-filter-btn ${assessmentFilter === "ALL" ? "active" : ""}`}
-                    onClick={() => setAssessmentFilter("ALL")}
-                  >
-                    All ({tests.length})
-                  </button>
-                  <button
-                    className={`std-filter-btn ${assessmentFilter === "AVAILABLE" ? "active" : ""}`}
-                    onClick={() => setAssessmentFilter("AVAILABLE")}
-                  >
-                    Available
-                  </button>
-                  <button
-                    className={`std-filter-btn ${assessmentFilter === "COMPLETED" ? "active" : ""}`}
-                    onClick={() => setAssessmentFilter("COMPLETED")}
-                  >
-                    Completed ({completedTestTitles.size})
-                  </button>
+                <div className="tabs">
+                  {[
+                    { key: "ALL", label: "All", count: tests.length },
+                    { key: "AVAILABLE", label: "Available", count: availableTests.length },
+                    { key: "COMPLETED", label: "Completed", count: completedTestIds.size },
+                  ].map((t) => (
+                    <button
+                      key={t.key}
+                      className={`tab ${filter === t.key ? "is-active" : ""}`}
+                      onClick={() => setFilter(t.key)}
+                    >
+                      {t.label} <span className="tab-count">{t.count}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              <div className="std-card-body">
-                <div className="upcoming-list-flex">
-                  {filteredTests.length === 0 ? (
-                    <div className="empty-assessments-box">
-                      <FaCheckCircle className="empty-check-icon" />
-                      <p>No assessments in this filter category.</p>
-                    </div>
-                  ) : (
-                    filteredTests.map((test) => {
-                      const isCompleted = completedTestTitles.has(test.title);
-                      const matchedResult = results.find((r) => (r.title || r.test) === test.title);
-
+              <div className="card-body-flush">
+                {filteredTests.length === 0 ? (
+                  <div className="empty-state">
+                    <span className="empty-icon"><FaCheckCircle /></span>
+                    <p className="empty-title">Nothing here</p>
+                    <p className="empty-text">No assessments match this filter.</p>
+                  </div>
+                ) : (
+                  <div className="assess-list">
+                    {filteredTests.map((test) => {
+                      const done = isCompleted(test);
+                      const result = myResults.find(
+                        (r) => String(r.testId) === String(test.id)
+                      );
                       return (
-                        <div key={test.id} className="upcoming-test-item">
-                          <div className="test-subject-icon-box">
+                        <div key={test.id} className="assess-item">
+                          <span className="assess-icon">
                             {SUBJECT_ICONS[test.subject] || <FaCode />}
-                          </div>
+                          </span>
 
-                          <div className="upcoming-test-info">
-                            <div className="test-title-row">
-                              <h4 className="test-item-title">{test.title}</h4>
+                          <div className="assess-body">
+                            <div className="assess-title-row">
+                              <span className="assess-title">{test.title}</span>
                               {test.proctored && (
-                                <span className="proctor-shield-badge" title="AI Camera Proctored Exam">
-                                  <FaShieldAlt /> AI Proctored
+                                <span className="badge badge-primary">
+                                  <FaShieldAlt /> Proctored
                                 </span>
                               )}
+                              {test.status === "Draft" && (
+                                <span className="badge badge-neutral">Draft</span>
+                              )}
                             </div>
-                            <div className="test-item-meta">
+                            <div className="assess-meta">
                               <span><FaBookOpen /> {test.subject}</span>
-                              <span>•</span>
-                              <span><FaClock /> {test.duration} mins</span>
-                              <span>•</span>
+                              <span><FaClock /> {test.duration} min</span>
                               <span><FaAward /> {test.marks} marks</span>
-                              <span>•</span>
                               <span><FaCalendarAlt /> {test.date}</span>
                             </div>
                           </div>
 
-                          <div className="upcoming-test-actions">
-                            {isCompleted ? (
-                              <div className="completed-action-group">
-                                <span className="score-pill-emerald">
-                                  {matchedResult ? matchedResult.score : "Graded"}
+                          <div className="assess-actions">
+                            {done ? (
+                              <>
+                                <span className="badge badge-success badge-lg">
+                                  {result?.score || "Graded"}
                                 </span>
                                 <button
-                                  className="btn-view-scorecard"
-                                  onClick={() => handleOpenScorecard(test.title)}
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => openScorecard(test)}
                                 >
                                   <FaEye /> Scorecard
                                 </button>
-                              </div>
+                              </>
+                            ) : test.status === "Draft" ? (
+                              <span className="text-sm text-muted">Not released</span>
                             ) : (
                               <button
-                                className="btn-start-camera-test"
-                                onClick={() => handleStartTest(test)}
+                                className="btn btn-primary btn-sm"
+                                onClick={() => startTest(test)}
                               >
-                                <FaPlay /> Start Exam
+                                <FaPlay /> Start
                               </button>
                             )}
                           </div>
                         </div>
                       );
-                    })
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* COLUMN 2: HARDWARE & AI PROCTORING READINESS CHECK */}
-            <div className="std-card">
-              <div className="std-card-header">
-                <div className="card-header-left">
-                  <FaShieldAlt className="card-header-icon text-emerald" />
-                  <h3 className="std-card-title">AI Proctoring &amp; System Readiness</h3>
-                </div>
-                <button
-                  className="btn-retest-system"
-                  onClick={handleRunSystemCheck}
-                  disabled={testingHardware}
-                >
-                  {testingHardware ? "Verifying..." : "Run Diagnostics"}
-                </button>
-              </div>
-
-              <div className="std-card-body">
-                <div className="proctor-status-summary-banner">
-                  <div className="summary-status-icon">
-                    <FaCheckCircle className="text-emerald" />
+                    })}
                   </div>
-                  <div>
-                    <h4 className="summary-status-title">System Verified for Examination</h4>
-                    <p className="summary-status-sub">
-                      All hardware sensors and security policies meet SmartAssess examination guidelines.
-                    </p>
+                )}
+              </div>
+            </section>
+
+            {/* Side column */}
+            <div className="stack">
+              <section className="card">
+                <div className="card-head">
+                  <div className="card-head-left">
+                    <FaShieldAlt className="card-head-icon" />
+                    <div>
+                      <h3 className="card-title">Exam readiness</h3>
+                      {checkedAt && (
+                        <p className="card-subtitle">Last checked {checkedAt}</p>
+                      )}
+                    </div>
                   </div>
-                </div>
-
-                <div className="readiness-check-grid">
-                  <div className="readiness-item">
-                    <div className="readiness-icon-wrap bg-indigo-glow">
-                      <FaVideo />
-                    </div>
-                    <div className="readiness-info">
-                      <strong>Webcam Sensor</strong>
-                      <span>720p/1080p HD Face Stream</span>
-                    </div>
-                    <span className="readiness-status ok"><FaCheck /> Active</span>
-                  </div>
-
-                  <div className="readiness-item">
-                    <div className="readiness-icon-wrap bg-emerald-glow">
-                      <FaMicrophone />
-                    </div>
-                    <div className="readiness-info">
-                      <strong>Audio Capture</strong>
-                      <span>Noise Gating &amp; Acoustic Track</span>
-                    </div>
-                    <span className="readiness-status ok"><FaCheck /> Active</span>
-                  </div>
-
-                  <div className="readiness-item">
-                    <div className="readiness-icon-wrap bg-blue-glow">
-                      <FaDesktop />
-                    </div>
-                    <div className="readiness-info">
-                      <strong>Screen &amp; Tab Lock</strong>
-                      <span>Multi-display &amp; Focus Tracker</span>
-                    </div>
-                    <span className="readiness-status ok"><FaCheck /> Enforced</span>
-                  </div>
-
-                  <div className="readiness-item">
-                    <div className="readiness-icon-wrap bg-purple-glow">
-                      <FaWifi />
-                    </div>
-                    <div className="readiness-info">
-                      <strong>Network Latency</strong>
-                      <span>24ms Ping • High Reliability</span>
-                    </div>
-                    <span className="readiness-status ok"><FaCheck /> 99.8% Up</span>
-                  </div>
-                </div>
-
-                <div className="proctor-guidelines-box">
-                  <h5>Examination Integrity Reminders:</h5>
-                  <ul>
-                    <li>Remain centered in webcam frame throughout the assessment.</li>
-                    <li>Browser window switches or background applications will generate infractions.</li>
-                    <li>Calculators and external aids are permitted only if explicitly authorized.</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ── ROW 2: SUBJECT MASTERY & RECENT SCORECARDS ─────────── */}
-          <div className="student-grid-row">
-            {/* SUBJECT MASTERY PROGRESS */}
-            <div className="std-card">
-              <div className="std-card-header">
-                <div className="card-header-left">
-                  <FaChartLine className="card-header-icon text-indigo" />
-                  <h3 className="std-card-title">Subject Proficiency &amp; Mastery</h3>
-                </div>
-                <span className="mastery-summary-tag">Term Average: 85.2%</span>
-              </div>
-
-              <div className="std-card-body">
-                <div className="subject-mastery-list">
-                  {subjectMastery.map((item) => (
-                    <div key={item.subject} className="mastery-item">
-                      <div className="mastery-item-header">
-                        <div className="mastery-name-wrap">
-                          <strong>{item.subject}</strong>
-                          <span className="mastery-grade-badge">{item.grade}</span>
-                        </div>
-                        <div className="mastery-score-wrap">
-                          <span className="mastery-status-text" style={{ color: item.color }}>
-                            {item.status}
-                          </span>
-                          <strong className="mastery-percentage">{item.score}%</strong>
-                        </div>
-                      </div>
-
-                      <div className="mastery-progress-track">
-                        <div
-                          className="mastery-progress-fill"
-                          style={{
-                            width: `${item.score}%`,
-                            background: `linear-gradient(90deg, ${item.color}bb, ${item.color})`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* RECENT TEST SUBMISSIONS & SCORECARDS */}
-            <div className="std-card">
-              <div className="std-card-header">
-                <div className="card-header-left">
-                  <FaAward className="card-header-icon text-purple" />
-                  <h3 className="std-card-title">Recent Submissions &amp; Scorecards</h3>
-                </div>
-                <button
-                  className="std-view-all"
-                  onClick={() => navigate("/results")}
-                >
-                  Full Analytics <FaArrowRight className="inline ml-1" />
-                </button>
-              </div>
-
-              <div className="std-card-body">
-                <div className="results-list-flex">
-                  {results.slice(0, 4).map((r) => (
-                    <div key={r.id} className="result-test-item">
-                      <div className="result-item-icon">
-                        <FaAward />
-                      </div>
-                      <div className="result-item-info">
-                        <h4 className="test-item-title">{r.title || r.test}</h4>
-                        <p className="test-item-meta">
-                          Evaluated by {r.reviewer || "Dr. Johnson"} • {r.date || "18 May 2025"}
-                        </p>
-                      </div>
-                      <div className="result-action-col">
-                        <span className="score-pill-emerald">{r.score}</span>
-                        <button
-                          className="btn-scorecard-quick-view"
-                          onClick={() => setSelectedScorecardResult(r)}
-                        >
-                          <FaEye /> Review
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ── ROW 3: ANNOUNCEMENTS & NOTICES ─────────────────────── */}
-          <div className="std-card">
-            <div className="std-card-header">
-              <div className="card-header-left">
-                <FaBullhorn className="card-header-icon text-amber" />
-                <h3 className="std-card-title">Department Announcements &amp; Notice Board</h3>
-              </div>
-              <span className="announcement-count-tag">{ANNOUNCEMENTS.length} Active Notices</span>
-            </div>
-
-            <div className="std-card-body">
-              <div className="notifications-list-flex">
-                {ANNOUNCEMENTS.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`notif-item ${item.urgent ? "urgent-notice" : ""}`}
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={runSystemCheck}
+                    disabled={checking}
                   >
-                    <div className="notif-header-row">
-                      <h4 className="notif-text">
-                        {item.urgent && <span className="urgent-tag">URGENT</span>}
-                        {item.title}
-                      </h4>
-                      <span className="notif-time">{item.time}</span>
-                    </div>
-                    <p className="notif-content-snippet">{item.content}</p>
-                    <span className="notif-author">Posted by: {item.author}</span>
+                    {checking ? <span className="spinner" /> : <FaSyncAlt />} Check
+                  </button>
+                </div>
+                <div className="card-body">
+                  <div className="ready-list">
+                    {READINESS.map((item) => (
+                      <div key={item.key} className="ready-item is-ok">
+                        <span className="ready-icon">{item.icon}</span>
+                        <span className="ready-text">
+                          <strong>{item.label}</strong>
+                          <span>{item.hint}</span>
+                        </span>
+                        <span className="ready-state">
+                          {checking ? (
+                            <span className="spinner" />
+                          ) : (
+                            <FaCheckCircle style={{ color: "var(--success)" }} />
+                          )}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              </section>
+
+              {mastery.length > 0 && (
+                <section className="card">
+                  <div className="card-head">
+                    <div className="card-head-left">
+                      <FaTrophy className="card-head-icon" />
+                      <h3 className="card-title">Subject performance</h3>
+                    </div>
+                  </div>
+                  <div className="card-body">
+                    <div className="mastery-list">
+                      {mastery.map((m) => (
+                        <div key={m.subject} className="mastery-row">
+                          <div className="mastery-head">
+                            <span className="mastery-name">{m.subject}</span>
+                            <span className="mastery-score">{m.score}%</span>
+                          </div>
+                          <div className="progress-track">
+                            <div
+                              className={`progress-fill ${
+                                m.score >= 80 ? "is-success" : m.score >= 60 ? "" : "is-warning"
+                              }`}
+                              style={{ width: `${Math.min(100, Math.max(0, m.score))}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              <section className="card">
+                <div className="card-head">
+                  <div className="card-head-left">
+                    <FaBullhorn className="card-head-icon" />
+                    <h3 className="card-title">Announcements</h3>
+                  </div>
+                </div>
+                <div className="card-body-flush">
+                  <div className="announce-list">
+                    {ANNOUNCEMENTS.map((a) => (
+                      <article
+                        key={a.id}
+                        className={`announce-item ${a.urgent ? "is-urgent" : ""}`}
+                      >
+                        <span className="announce-rail" />
+                        <div className="announce-body">
+                          <div className="announce-title-row">
+                            <span className="announce-title">{a.title}</span>
+                            {a.urgent && <span className="badge badge-danger">Urgent</span>}
+                          </div>
+                          <span className="announce-meta">
+                            {a.author} · {a.time}
+                          </span>
+                          <p className="announce-text">{a.content}</p>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* ── SCORECARD REVIEW MODAL ─────────────────────────────── */}
-        {selectedScorecardResult && (
-          <ScorecardReviewModal
-            result={selectedScorecardResult}
-            onClose={() => setSelectedScorecardResult(null)}
-          />
-        )}
-      </main>
+      {scorecard && (
+        <ScorecardReviewModal
+          result={scorecard.result}
+          submission={scorecard.submission}
+          onClose={() => setScorecard(null)}
+        />
+      )}
     </div>
   );
 }
-
-export default StudentDashboard;

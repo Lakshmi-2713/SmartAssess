@@ -1,6 +1,4 @@
-import React, { useState, useEffect } from "react";
-import Sidebar from "../components/Sidebar";
-import Navbar from "../components/Navbar";
+import { useState, useRef } from "react";
 import {
   FaUser,
   FaLock,
@@ -9,318 +7,497 @@ import {
   FaCheckCircle,
   FaSun,
   FaMoon,
+  FaDesktop,
+  FaCamera,
+  FaTrashAlt,
+  FaUniversalAccess,
 } from "react-icons/fa";
-import { useTheme, ACCENT_COLORS } from "../context/ThemeContext";
+import Sidebar from "../components/Sidebar";
+import Navbar from "../components/Navbar";
+import ToastStack from "../components/ToastStack";
+import { getInitials } from "../utils/format";
+import { useToasts } from "../hooks/useToasts";
+import { useTheme } from "../context/useTheme";
+import { ACCENT_COLORS } from "../context/themeTokens";
+import { getUser } from "../services/session";
 import "../styles/settings.css";
 
-function Settings() {
+const TABS = [
+  { key: "profile", label: "Profile", icon: <FaUser /> },
+  { key: "appearance", label: "Appearance", icon: <FaPalette /> },
+  { key: "accessibility", label: "Accessibility", icon: <FaUniversalAccess /> },
+  { key: "notifications", label: "Notifications", icon: <FaBell /> },
+  { key: "security", label: "Security", icon: <FaLock /> },
+];
+
+const THEME_MODES = [
+  { key: "light", label: "Light", icon: <FaSun /> },
+  { key: "dark", label: "Dark", icon: <FaMoon /> },
+  { key: "system", label: "System", icon: <FaDesktop /> },
+];
+
+const FONT_SIZES = [
+  { key: "small", label: "Small" },
+  { key: "medium", label: "Default" },
+  { key: "large", label: "Large" },
+];
+
+// localStorage tops out around 5 MB; a raw photo blows straight past it.
+const MAX_AVATAR_BYTES = 512 * 1024;
+const AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+export default function Settings() {
+  const toasts = useToasts();
+  const fileRef = useRef(null);
+
   const {
-    themeMode,
-    setThemeMode,
-    accentColor,
-    setAccentColor,
-    userProfile,
-    updateProfile,
+    themeMode, setThemeMode,
+    accentColor, setAccentColor,
+    fontSize, setFontSize,
+    compactSidebar, setCompactSidebar,
+    reducedMotion, setReducedMotion,
+    highContrast, setHighContrast,
+    userProfile, updateProfile,
   } = useTheme();
 
+  const sessionUser = getUser() || {};
+
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [activeSubTab, setActiveSubTab] = useState("profile"); // profile, password, notifications, appearance
+  const [tab, setTab] = useState("profile");
 
-  // Form State
-  const [fullName, setFullName] = useState(userProfile?.name || "Rahul Verma");
-  const [email, setEmail] = useState(userProfile?.email || "rahul.verma@student.com");
-  const [phone, setPhone] = useState(userProfile?.phone || "9876543210");
-  const [department, setDepartment] = useState(userProfile?.department || "Computer Science");
-  const [semester, setSemester] = useState("4th Semester");
-  const [avatarUrl, setAvatarUrl] = useState(userProfile?.avatar || "");
-  const [savedMsg, setSavedMsg] = useState("");
+  const [form, setForm] = useState({
+    name: userProfile?.name || sessionUser.name || "",
+    email: userProfile?.email || sessionUser.email || "",
+    phone: userProfile?.phone || "",
+    department: userProfile?.department || sessionUser.department || "",
+    location: userProfile?.location || "",
+    bio: userProfile?.bio || "",
+    avatar: userProfile?.avatar || "",
+  });
+  const [dirty, setDirty] = useState(false);
 
-  useEffect(() => {
-    if (userProfile) {
-      setFullName(userProfile.name || "Rahul Verma");
-      setEmail(userProfile.email || "rahul.verma@student.com");
-      setPhone(userProfile.phone || "9876543210");
-      setDepartment(userProfile.department || "Computer Science");
-      setAvatarUrl(userProfile.avatar || "");
+  /**
+   * Re-sync when the stored profile changes underneath us (a save, or another
+   * tab). This is React's documented "adjust state during render" pattern
+   * rather than an effect: it runs before the browser paints and does not
+   * trigger a second render pass. Unsaved edits are never clobbered.
+   */
+  const [seenProfile, setSeenProfile] = useState(userProfile);
+  if (userProfile !== seenProfile) {
+    setSeenProfile(userProfile);
+    if (!dirty) {
+      setForm({
+        name: userProfile?.name || sessionUser.name || "",
+        email: userProfile?.email || sessionUser.email || "",
+        phone: userProfile?.phone || "",
+        department: userProfile?.department || sessionUser.department || "",
+        location: userProfile?.location || "",
+        bio: userProfile?.bio || "",
+        avatar: userProfile?.avatar || "",
+      });
     }
-  }, [userProfile]);
+  }
 
-  const handleSaveProfile = (e) => {
-    e.preventDefault();
-    updateProfile({
-      name: fullName,
-      email,
-      phone,
-      department,
-      avatar: avatarUrl,
-    });
-    setSavedMsg("Profile changes saved successfully!");
-    setTimeout(() => setSavedMsg(""), 3000);
+  const setField = (e) => {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+    setDirty(true);
   };
 
-  const handleAvatarChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        setAvatarUrl(uploadEvent.target.result);
-      };
-      reader.readAsDataURL(file);
+  const handleSave = (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) {
+      toasts.error("Name cannot be empty.");
+      return;
     }
+    updateProfile({ ...form, name: form.name.trim() });
+    setDirty(false);
+    toasts.success("Profile saved.");
+  };
+
+  const handleAvatar = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+
+    if (!AVATAR_TYPES.includes(file.type)) {
+      toasts.error("Choose a PNG, JPEG, WebP or GIF image.");
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      toasts.error(
+        `That image is ${(file.size / 1024 / 1024).toFixed(1)} MB. Please use one under 512 KB.`
+      );
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onerror = () => toasts.error("Could not read that image file.");
+    reader.onload = (ev) => {
+      setForm((prev) => ({ ...prev, avatar: String(ev.target?.result || "") }));
+      setDirty(true);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeAvatar = () => {
+    setForm((prev) => ({ ...prev, avatar: "" }));
+    setDirty(true);
   };
 
   return (
-    <div className="settings-layout-container">
+    <div className="app-shell">
       <Sidebar mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      <ToastStack toasts={toasts.toasts} onDismiss={toasts.dismiss} />
 
-      <main className="settings-main-content">
+      <div className="app-main">
         <Navbar
           title="Settings"
-          subtitle="Manage your account settings"
+          subtitle="Profile, appearance and preferences"
           onToggleMobileSidebar={() => setMobileOpen(true)}
         />
 
-        <div className="settings-dashboard-body">
-          {/* Header */}
-          <div className="settings-top-header">
-            <h2 className="settings-title">Settings</h2>
-            <p className="settings-sub">Manage your account settings</p>
+        <div className="app-body">
+          <div className="page-head">
+            <div className="page-head-title">
+              <span className="page-head-icon"><FaUser /></span>
+              <div>
+                <h2 className="page-title">Settings</h2>
+                <p className="page-subtitle">Manage your account and how the app looks</p>
+              </div>
+            </div>
           </div>
 
-          {savedMsg && (
-            <div className="settings-alert-success">
-              <FaCheckCircle /> {savedMsg}
-            </div>
-          )}
+          <div className="settings-layout">
+            <nav className="settings-nav" aria-label="Settings sections">
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  className={`settings-nav-btn ${tab === t.key ? "is-active" : ""}`}
+                  onClick={() => setTab(t.key)}
+                >
+                  {t.icon} <span>{t.label}</span>
+                </button>
+              ))}
+            </nav>
 
-          {/* Sub Navigation & Form Grid */}
-          <div className="settings-content-grid">
-            {/* Left Sub Nav */}
-            <div className="settings-sub-nav">
-              <button
-                className={`sub-nav-btn ${activeSubTab === "profile" ? "active" : ""}`}
-                onClick={() => setActiveSubTab("profile")}
-              >
-                <FaUser /> Profile Settings
-              </button>
-              <button
-                className={`sub-nav-btn ${activeSubTab === "password" ? "active" : ""}`}
-                onClick={() => setActiveSubTab("password")}
-              >
-                <FaLock /> Change Password
-              </button>
-              <button
-                className={`sub-nav-btn ${activeSubTab === "notifications" ? "active" : ""}`}
-                onClick={() => setActiveSubTab("notifications")}
-              >
-                <FaBell /> Notification Settings
-              </button>
-              <button
-                className={`sub-nav-btn ${activeSubTab === "appearance" ? "active" : ""}`}
-                onClick={() => setActiveSubTab("appearance")}
-              >
-                <FaPalette /> Appearance
-              </button>
-            </div>
-
-            {/* Right Form Card */}
-            <div className="settings-card-panel">
-              {activeSubTab === "profile" && (
-                <form onSubmit={handleSaveProfile} className="profile-settings-form">
-                  <h3 className="panel-section-title">Profile Settings</h3>
-
-                  <div className="form-input-group">
-                    <label>Full Name</label>
-                    <input
-                      type="text"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-input-group">
-                    <label>Email</label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-input-group">
-                    <label>Phone</label>
-                    <input
-                      type="text"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-row-two-col">
-                    <div className="form-input-group">
-                      <label>Department</label>
-                      <select
-                        value={department}
-                        onChange={(e) => setDepartment(e.target.value)}
-                      >
-                        <option>Computer Science</option>
-                        <option>Information Technology</option>
-                        <option>Electronics</option>
-                        <option>Mechanical</option>
-                      </select>
-                    </div>
-
-                    <div className="form-input-group">
-                      <label>Semester</label>
-                      <select
-                        value={semester}
-                        onChange={(e) => setSemester(e.target.value)}
-                      >
-                        <option>1st Semester</option>
-                        <option>2nd Semester</option>
-                        <option>3rd Semester</option>
-                        <option>4th Semester</option>
-                        <option>5th Semester</option>
-                        <option>6th Semester</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Profile Picture Section */}
-                  <div className="profile-picture-section">
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Profile Picture</label>
-                    <div className="avatar-flex-row">
-                      <img src={avatarUrl} alt="Avatar Preview" className="avatar-preview-img" />
-                      <div className="avatar-action-btns">
-                        <label className="btn-change-photo">
-                          Change Photo
-                          <input type="file" accept="image/*" onChange={handleAvatarChange} hidden />
-                        </label>
-                        <button
-                          type="button"
-                          className="btn-remove-photo"
-                          onClick={() => setAvatarUrl("https://via.placeholder.com/150")}
-                        >
-                          Remove
-                        </button>
+            <div className="settings-panel card">
+              {/* ── Profile ─────────────────────────────────── */}
+              {tab === "profile" && (
+                <form onSubmit={handleSave} noValidate>
+                  <div className="card-head">
+                    <div className="card-head-left">
+                      <FaUser className="card-head-icon" />
+                      <div>
+                        <h3 className="card-title">Profile</h3>
+                        <p className="card-subtitle">How you appear across SmartAssess</p>
                       </div>
                     </div>
                   </div>
 
-                  <div className="form-submit-row">
-                    <button type="submit" className="btn-save-changes-blue">
-                      Save Changes
+                  <div className="card-body stack">
+                    <div className="avatar-editor">
+                      {form.avatar ? (
+                        <img src={form.avatar} alt="" className="avatar avatar-xl" />
+                      ) : (
+                        <span className="avatar avatar-xl">{getInitials(form.name)}</span>
+                      )}
+                      <div className="avatar-editor-actions">
+                        <p className="field-hint">
+                          PNG, JPEG, WebP or GIF. Maximum 512&nbsp;KB.
+                        </p>
+                        <div className="row">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => fileRef.current?.click()}
+                          >
+                            <FaCamera /> Upload
+                          </button>
+                          {form.avatar && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={removeAvatar}
+                            >
+                              <FaTrashAlt /> Remove
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          ref={fileRef}
+                          type="file"
+                          accept={AVATAR_TYPES.join(",")}
+                          onChange={handleAvatar}
+                          className="sr-only"
+                          aria-label="Upload profile photo"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="divider" />
+
+                    <div className="form-grid">
+                      <div className="field">
+                        <label className="field-label">Full name <span className="req">*</span></label>
+                        <input className="input" name="name" value={form.name} onChange={setField} required />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">Email</label>
+                        <input className="input" name="email" type="email" value={form.email} onChange={setField} />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">Phone</label>
+                        <input className="input" name="phone" value={form.phone} onChange={setField} placeholder="+91 98765 43210" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">Department</label>
+                        <input className="input" name="department" value={form.department} onChange={setField} />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">Location</label>
+                        <input className="input" name="location" value={form.location} onChange={setField} />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">Role</label>
+                        <input className="input" value={sessionUser.role || "—"} disabled />
+                        <span className="field-hint">Roles are assigned by an administrator.</span>
+                      </div>
+                      <div className="field form-row-full">
+                        <label className="field-label">Bio</label>
+                        <textarea className="textarea" name="bio" rows="3" value={form.bio} onChange={setField} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="card-foot row-between">
+                    <span className="text-xs text-muted">
+                      {dirty ? "You have unsaved changes." : "All changes saved."}
+                    </span>
+                    <button type="submit" className="btn btn-primary" disabled={!dirty}>
+                      <FaCheckCircle /> Save changes
                     </button>
                   </div>
                 </form>
               )}
 
-              {activeSubTab === "password" && (
-                <div className="tab-pane-content">
-                  <h3 className="panel-section-title">Change Password</h3>
-                  <form onSubmit={(e) => { e.preventDefault(); setSavedMsg("Password updated successfully!"); setTimeout(() => setSavedMsg(""), 3000); }}>
-                    <div className="form-input-group">
-                      <label>Current Password</label>
-                      <input type="password" placeholder="••••••••" required />
+              {/* ── Appearance ──────────────────────────────── */}
+              {tab === "appearance" && (
+                <>
+                  <div className="card-head">
+                    <div className="card-head-left">
+                      <FaPalette className="card-head-icon" />
+                      <div>
+                        <h3 className="card-title">Appearance</h3>
+                        <p className="card-subtitle">Theme, accent colour and density</p>
+                      </div>
                     </div>
-                    <div className="form-input-group">
-                      <label>New Password</label>
-                      <input type="password" placeholder="••••••••" required minLength="6" />
-                    </div>
-                    <div className="form-input-group">
-                      <label>Confirm New Password</label>
-                      <input type="password" placeholder="••••••••" required minLength="6" />
-                    </div>
-                    <div className="form-submit-row mt-4">
-                      <button type="submit" className="btn-save-changes-blue">Update Password</button>
-                    </div>
-                  </form>
-                </div>
+                  </div>
+
+                  <div className="card-body stack">
+                    <section className="setting-block">
+                      <h4>Theme</h4>
+                      <p className="field-hint">
+                        “System” follows your operating system and updates live.
+                      </p>
+                      <div className="option-row">
+                        {THEME_MODES.map((m) => (
+                          <button
+                            key={m.key}
+                            className={`option-card ${themeMode === m.key ? "is-active" : ""}`}
+                            onClick={() => setThemeMode(m.key)}
+                          >
+                            <span className="option-icon">{m.icon}</span>
+                            <span>{m.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <div className="divider" />
+
+                    <section className="setting-block">
+                      <h4>Accent colour</h4>
+                      <div className="swatch-row">
+                        {Object.entries(ACCENT_COLORS).map(([key, c]) => (
+                          <button
+                            key={key}
+                            className={`swatch ${accentColor === key ? "is-active" : ""}`}
+                            style={{ "--swatch": c.primary }}
+                            onClick={() => setAccentColor(key)}
+                            title={c.name}
+                            aria-label={`Accent colour: ${c.name}`}
+                            aria-pressed={accentColor === key}
+                          >
+                            {accentColor === key && <FaCheckCircle />}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <div className="divider" />
+
+                    <section className="setting-block">
+                      <h4>Text size</h4>
+                      <div className="option-row">
+                        {FONT_SIZES.map((f) => (
+                          <button
+                            key={f.key}
+                            className={`option-card ${fontSize === f.key ? "is-active" : ""}`}
+                            onClick={() => setFontSize(f.key)}
+                          >
+                            <span
+                              className="option-icon"
+                              style={{
+                                fontSize:
+                                  f.key === "small" ? 13 : f.key === "large" ? 21 : 17,
+                                fontWeight: 700,
+                              }}
+                            >
+                              Aa
+                            </span>
+                            <span>{f.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <div className="divider" />
+
+                    <ToggleRow
+                      label="Compact sidebar"
+                      hint="Collapse the sidebar to icons only."
+                      checked={compactSidebar}
+                      onChange={setCompactSidebar}
+                    />
+                  </div>
+                </>
               )}
 
-              {activeSubTab === "notifications" && (
-                <div className="tab-pane-content">
-                  <h3 className="panel-section-title">Notification Settings</h3>
-                  <div className="checkbox-setting-item mt-3">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" defaultChecked /> Email alerts for upcoming scheduled tests
-                    </label>
+              {/* ── Accessibility ───────────────────────────── */}
+              {tab === "accessibility" && (
+                <>
+                  <div className="card-head">
+                    <div className="card-head-left">
+                      <FaUniversalAccess className="card-head-icon" />
+                      <div>
+                        <h3 className="card-title">Accessibility</h3>
+                        <p className="card-subtitle">Motion and contrast preferences</p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="checkbox-setting-item mt-3">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" defaultChecked /> Result and scorecard evaluation notifications
-                    </label>
+                  <div className="card-body stack">
+                    <ToggleRow
+                      label="Reduce motion"
+                      hint="Minimise animations and transitions throughout the app."
+                      checked={reducedMotion}
+                      onChange={setReducedMotion}
+                    />
+                    <div className="divider" />
+                    <ToggleRow
+                      label="High contrast"
+                      hint="Strengthen borders and text contrast for better legibility."
+                      checked={highContrast}
+                      onChange={setHighContrast}
+                    />
                   </div>
-                  <div className="checkbox-setting-item mt-3">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" defaultChecked /> Proctoring security log summaries
-                    </label>
-                  </div>
-                </div>
+                </>
               )}
 
-              {activeSubTab === "appearance" && (
-                <div className="tab-pane-content">
-                  <h3 className="panel-section-title">Appearance & Theme Preferences</h3>
-                  <p className="text-sm text-slate-400 mt-1 mb-4">Choose your preferred visual mode and platform accent color.</p>
-
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Theme Mode</label>
-                  <div style={{ display: "flex", gap: "12px", marginBottom: "20px" }}>
-                    <button
-                      type="button"
-                      className={`sub-nav-btn ${themeMode === "dark" ? "active" : ""}`}
-                      style={{ flex: 1, justifyContent: "center" }}
-                      onClick={() => setThemeMode("dark")}
-                    >
-                      <FaMoon /> Dark Mode
-                    </button>
-                    <button
-                      type="button"
-                      className={`sub-nav-btn ${themeMode === "light" ? "active" : ""}`}
-                      style={{ flex: 1, justifyContent: "center" }}
-                      onClick={() => setThemeMode("light")}
-                    >
-                      <FaSun /> Light Mode
-                    </button>
+              {/* ── Notifications ───────────────────────────── */}
+              {tab === "notifications" && (
+                <>
+                  <div className="card-head">
+                    <div className="card-head-left">
+                      <FaBell className="card-head-icon" />
+                      <div>
+                        <h3 className="card-title">Notifications</h3>
+                        <p className="card-subtitle">Choose what you hear about</p>
+                      </div>
+                    </div>
                   </div>
-
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Primary Accent Color</label>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px" }}>
-                    {Object.entries(ACCENT_COLORS).map(([key, col]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => setAccentColor(key)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          padding: "10px 14px",
-                          borderRadius: "10px",
-                          border: accentColor === key ? `2px solid ${col.primary}` : "1px solid var(--border-color)",
-                          background: accentColor === key ? col.bg : "var(--bg-card)",
-                          color: "var(--text-primary)",
-                          cursor: "pointer",
-                          fontWeight: 600,
-                          fontSize: "13px",
-                        }}
-                      >
-                        <span style={{ width: "14px", height: "14px", borderRadius: "50%", background: col.primary, display: "inline-block" }} />
-                        {col.name}
-                      </button>
-                    ))}
+                  <div className="card-body stack">
+                    <NotificationRow label="New submissions" hint="When a student completes an assessment." />
+                    <div className="divider" />
+                    <NotificationRow label="Proctoring alerts" hint="When an integrity violation is flagged." />
+                    <div className="divider" />
+                    <NotificationRow label="Scheduled reminders" hint="An hour before a test goes live." />
+                    <div className="divider" />
+                    <NotificationRow label="Weekly digest" hint="A Monday summary of cohort performance." defaultOn={false} />
                   </div>
-                </div>
+                </>
+              )}
+
+              {/* ── Security ────────────────────────────────── */}
+              {tab === "security" && (
+                <>
+                  <div className="card-head">
+                    <div className="card-head-left">
+                      <FaLock className="card-head-icon" />
+                      <div>
+                        <h3 className="card-title">Security</h3>
+                        <p className="card-subtitle">Password and session</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="card-body stack">
+                    <div className="alert alert-info">
+                      <FaLock />
+                      <div className="alert-body">
+                        <div className="alert-title">Password changes are not yet wired up</div>
+                        <div>
+                          This screen is a placeholder. Password updates need a
+                          dedicated, authenticated API endpoint before they can be
+                          offered here — ask your administrator to reset it for now.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="form-grid">
+                      <div className="field">
+                        <label className="field-label">Current password</label>
+                        <input className="input" type="password" disabled placeholder="••••••••" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label">New password</label>
+                        <input className="input" type="password" disabled placeholder="••••••••" />
+                      </div>
+                    </div>
+                    <div>
+                      <button className="btn btn-primary" disabled>Update password</button>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
 
-export default Settings;
+function ToggleRow({ label, hint, checked, onChange }) {
+  return (
+    <div className="toggle-row">
+      <div>
+        <strong>{label}</strong>
+        <span className="field-hint">{hint}</span>
+      </div>
+      <label className="switch">
+        <input
+          type="checkbox"
+          checked={Boolean(checked)}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span className="switch-track" />
+        <span className="sr-only">{label}</span>
+      </label>
+    </div>
+  );
+}
+
+function NotificationRow({ label, hint, defaultOn = true }) {
+  const [on, setOn] = useState(defaultOn);
+  return <ToggleRow label={label} hint={hint} checked={on} onChange={setOn} />;
+}

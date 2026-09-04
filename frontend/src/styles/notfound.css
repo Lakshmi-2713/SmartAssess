@@ -1,0 +1,98 @@
+.notfound-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  background: var(--bg-main);
+}
+
+.notfound-card {
+  max-width: 460px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-10) var(--sp-8);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+.notfound-icon {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--primary-bg-subtle);
+  color: var(--primary-accent);
+  font-size: var(--fs-2xl);
+}
+
+.notfound-code {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-faint);
+}
+
+.notfound-card h1 { font-size: var(--fs-xl); font-weight: var(--fw-bold); }
+.notfound-text { color: var(--text-muted); font-size: var(--fs-base); }
+
+/* Error boundary fallback shares the same visual language */
+.app-error-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  background: var(--bg-main);
+}
+
+.app-error-card {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--sp-4);
+  padding: var(--sp-10) var(--sp-8);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+.app-error-icon {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-black);
+}
+
+.app-error-card h1 { font-size: var(--fs-xl); }
+.app-error-card p { color: var(--text-muted); font-size: var(--fs-base); }
+
+.app-error-detail {
+  width: 100%;
+  max-height: 140px;
+  overflow: auto;
+  padding: var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.app-error-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; justify-content: center; }

@@ -1,39 +1,83 @@
-import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useRef, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   FaBars,
   FaSun,
   FaMoon,
+  FaDesktop,
   FaBell,
-  FaSearch,
   FaCog,
   FaUser,
   FaSignOutAlt,
 } from "react-icons/fa";
-import { useTheme } from "../context/ThemeContext";
+import { useTheme } from "../context/useTheme";
+import { getUser, clearSession } from "../services/session";
+import { getInitials } from "../utils/format";
 import "../styles/navbar.css";
 
-function Navbar({ title = "Dashboard", subtitle = "Welcome back to SmartAssess Platform", onToggleMobileSidebar }) {
-  const { themeMode, setThemeMode, userProfile } = useTheme();
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
+const NOTIFICATIONS = [
+  { id: 1, title: "New test submission", meta: "Data Structures · 5m ago", unread: true },
+  { id: 2, title: "Scheduled assessment", meta: "Java Fundamentals starts in 1h", unread: true },
+  { id: 3, title: "Proctoring report ready", meta: "Operating Systems · 2h ago", unread: false },
+];
 
-  const toggleTheme = () => {
-    if (themeMode === "dark") {
-      setThemeMode("light");
-    } else {
-      setThemeMode("dark");
-    }
+const THEME_CYCLE = ["light", "dark", "system"];
+const THEME_ICON = { light: <FaSun />, dark: <FaMoon />, system: <FaDesktop /> };
+const THEME_LABEL = { light: "Light", dark: "Dark", system: "System" };
+
+/** Closes a popover when the user clicks outside it or presses Escape. */
+function useDismiss(ref, onDismiss, active) {
+  useEffect(() => {
+    if (!active) return undefined;
+
+    const onPointer = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onDismiss();
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") onDismiss();
+    };
+
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [ref, onDismiss, active]);
+}
+
+export default function Navbar({
+  title = "Dashboard",
+  subtitle,
+  onToggleMobileSidebar,
+  actions,
+}) {
+  const navigate = useNavigate();
+  const { themeMode, setThemeMode, userProfile } = useTheme();
+
+  const [openMenu, setOpenMenu] = useState(null); // "bell" | "profile" | null
+  const bellRef = useRef(null);
+  const profileRef = useRef(null);
+
+  useDismiss(bellRef, () => setOpenMenu(null), openMenu === "bell");
+  useDismiss(profileRef, () => setOpenMenu(null), openMenu === "profile");
+
+  const user = getUser() || {};
+  const role = (user.role || userProfile?.role || "faculty").toLowerCase();
+  const name = userProfile?.name || user.name || "SmartAssess User";
+  const email = userProfile?.email || user.email || "";
+
+  const unreadCount = NOTIFICATIONS.filter((n) => n.unread).length;
+
+  const cycleTheme = () => {
+    const idx = THEME_CYCLE.indexOf(themeMode);
+    setThemeMode(THEME_CYCLE[(idx + 1) % THEME_CYCLE.length]);
   };
 
-  const getInitials = (name) => {
-    if (!name) return "SA";
-    return name
-      .split(" ")
-      .map((n) => n[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase();
+  const handleLogout = () => {
+    clearSession();
+    setOpenMenu(null);
+    navigate("/", { replace: true });
   };
 
   return (
@@ -41,146 +85,111 @@ function Navbar({ title = "Dashboard", subtitle = "Welcome back to SmartAssess P
       <div className="navbar-left">
         {onToggleMobileSidebar && (
           <button
-            className="mobile-menu-btn"
+            className="navbar-burger"
             onClick={onToggleMobileSidebar}
-            aria-label="Toggle navigation menu"
+            aria-label="Open navigation"
           >
             <FaBars />
           </button>
         )}
         <div className="navbar-heading">
-          <h2>{title}</h2>
+          <h1>{title}</h1>
           {subtitle && <p>{subtitle}</p>}
         </div>
       </div>
 
       <div className="navbar-right">
-        {/* Quick Search */}
-        <div className="nav-search-bar">
-          <FaSearch className="search-icon" />
-          <input type="text" placeholder="Search tests, students, courses..." />
-        </div>
+        {actions}
 
-        {/* Theme Quick Switcher */}
         <button
-          className="nav-icon-btn theme-toggle-btn"
-          onClick={toggleTheme}
-          title={`Switch to ${themeMode === "dark" ? "Light" : "Dark"} Mode`}
-          aria-label="Toggle Theme"
+          className="navbar-icon-btn"
+          onClick={cycleTheme}
+          title={`Theme: ${THEME_LABEL[themeMode] || "System"} — click to change`}
+          aria-label={`Theme: ${THEME_LABEL[themeMode] || "System"}. Click to change.`}
         >
-          {themeMode === "dark" ? <FaSun className="icon-sun" /> : <FaMoon className="icon-moon" />}
+          {THEME_ICON[themeMode] || <FaDesktop />}
         </button>
 
-        {/* Notifications Popover */}
-        <div className="nav-dropdown-wrapper">
+        {/* Notifications */}
+        <div className="navbar-pop" ref={bellRef}>
           <button
-            className="nav-icon-btn notification-btn"
-            onClick={() => {
-              setShowNotifications(!showNotifications);
-              setShowProfileMenu(false);
-            }}
-            title="Notifications"
-            aria-label="Notifications"
+            className="navbar-icon-btn"
+            onClick={() => setOpenMenu(openMenu === "bell" ? null : "bell")}
+            aria-label={`Notifications, ${unreadCount} unread`}
+            aria-expanded={openMenu === "bell"}
           >
             <FaBell />
-            <span className="notification-badge">3</span>
+            {unreadCount > 0 && <span className="navbar-badge">{unreadCount}</span>}
           </button>
 
-          {showNotifications && (
-            <div className="nav-dropdown-menu notification-menu">
-              <div className="dropdown-header">
-                <h4>Notifications</h4>
-                <span className="badge-new">3 New</span>
+          {openMenu === "bell" && (
+            <div className="navbar-menu" role="menu">
+              <div className="navbar-menu-head">
+                <strong>Notifications</strong>
+                <span className="badge badge-primary">{unreadCount} new</span>
               </div>
-              <div className="dropdown-items">
-                <div className="notification-item unread">
-                  <div className="notif-dot"></div>
-                  <div className="notif-content">
-                    <p className="notif-title">New Test Submission</p>
-                    <p className="notif-time">CS101 Java Basics • 5m ago</p>
-                  </div>
-                </div>
-                <div className="notification-item unread">
-                  <div className="notif-dot"></div>
-                  <div className="notif-content">
-                    <p className="notif-title">Scheduled Assessment</p>
-                    <p className="notif-time">AI Fundamentals starts in 1h</p>
-                  </div>
-                </div>
-                <div className="notification-item unread">
-                  <div className="notif-dot"></div>
-                  <div className="notif-content">
-                    <p className="notif-title">System Alert</p>
-                    <p className="notif-time">Proctoring report generated</p>
-                  </div>
-                </div>
-              </div>
-              <div className="dropdown-footer">
-                <Link to="/settings" onClick={() => setShowNotifications(false)}>
-                  Notification Preferences →
-                </Link>
-              </div>
+              <ul className="navbar-notif-list">
+                {NOTIFICATIONS.map((n) => (
+                  <li key={n.id} className={n.unread ? "is-unread" : ""}>
+                    <span className="navbar-notif-dot" aria-hidden="true" />
+                    <div>
+                      <strong>{n.title}</strong>
+                      <span>{n.meta}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <Link
+                to="/settings"
+                className="navbar-menu-foot"
+                onClick={() => setOpenMenu(null)}
+              >
+                Notification preferences →
+              </Link>
             </div>
           )}
         </div>
 
-        {/* Profile Avatar & Dropdown Menu */}
-        <div className="nav-dropdown-wrapper">
+        {/* Profile */}
+        <div className="navbar-pop" ref={profileRef}>
           <button
-            className="nav-profile-btn"
-            onClick={() => {
-              setShowProfileMenu(!showProfileMenu);
-              setShowNotifications(false);
-            }}
-            aria-label="User profile menu"
+            className="navbar-profile-btn"
+            onClick={() => setOpenMenu(openMenu === "profile" ? null : "profile")}
+            aria-label="Account menu"
+            aria-expanded={openMenu === "profile"}
           >
             {userProfile?.avatar ? (
-              <img
-                src={userProfile.avatar}
-                alt={userProfile.name}
-                className="nav-avatar-img"
-              />
+              <img src={userProfile.avatar} alt="" className={`avatar avatar-sm avatar-${role}`} />
             ) : (
-              <div className="nav-avatar-initials">
-                {getInitials(userProfile?.name)}
-              </div>
+              <span className={`avatar avatar-sm avatar-${role}`}>{getInitials(name)}</span>
             )}
-            <span className="nav-user-name">{userProfile?.name || "Admin"}</span>
+            <span className="navbar-profile-name truncate">{name}</span>
           </button>
 
-          {showProfileMenu && (
-            <div className="nav-dropdown-menu profile-menu">
-              <div className="profile-menu-header">
-                <div className="profile-menu-info">
-                  <strong>{userProfile?.name || "Dr. Sarah Jenkins"}</strong>
-                  <span className="profile-email">{userProfile?.email || "sarah@smartassess.edu"}</span>
+          {openMenu === "profile" && (
+            <div className="navbar-menu navbar-menu-right" role="menu">
+              <div className="navbar-menu-user">
+                {userProfile?.avatar ? (
+                  <img src={userProfile.avatar} alt="" className={`avatar avatar-${role}`} />
+                ) : (
+                  <span className={`avatar avatar-${role}`}>{getInitials(name)}</span>
+                )}
+                <div className="truncate">
+                  <strong className="truncate">{name}</strong>
+                  <span className="truncate">{email}</span>
                 </div>
               </div>
-              <div className="profile-menu-divider" />
-              <div className="dropdown-items">
-                <Link
-                  to="/settings"
-                  className="menu-link"
-                  onClick={() => setShowProfileMenu(false)}
-                >
-                  <FaUser className="menu-icon" /> Profile & Account
-                </Link>
-                <Link
-                  to="/settings"
-                  className="menu-link"
-                  onClick={() => setShowProfileMenu(false)}
-                >
-                  <FaCog className="menu-icon" /> Appearance & Settings
-                </Link>
-                <div className="profile-menu-divider" />
-                <Link
-                  to="/"
-                  className="menu-link logout-menu-link"
-                  onClick={() => setShowProfileMenu(false)}
-                >
-                  <FaSignOutAlt className="menu-icon" /> Sign Out
-                </Link>
-              </div>
+              <div className="divider" />
+              <Link to="/settings" className="navbar-menu-link" onClick={() => setOpenMenu(null)}>
+                <FaUser /> Profile &amp; account
+              </Link>
+              <Link to="/settings" className="navbar-menu-link" onClick={() => setOpenMenu(null)}>
+                <FaCog /> Appearance
+              </Link>
+              <div className="divider" />
+              <button className="navbar-menu-link is-danger" onClick={handleLogout}>
+                <FaSignOutAlt /> Sign out
+              </button>
             </div>
           )}
         </div>
@@ -188,5 +197,3 @@ function Navbar({ title = "Dashboard", subtitle = "Welcome back to SmartAssess P
     </header>
   );
 }
-
-export default Navbar;
