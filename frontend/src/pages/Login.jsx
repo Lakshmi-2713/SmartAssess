@@ -90,18 +90,14 @@ export default function Login() {
 
     setLoading(true);
     try {
-      // The role chip is a UI affordance, not an auth factor — filtering the
-      // lookup by it added no security while rejecting correct credentials
-      // whenever the chip was left on the wrong role. The server returns the
-      // account's real role and we route by that.
       const res = await API.post("/auth/login", {
         email: trimmedEmail,
         password,
+        role: activeRole.key,
       });
 
       const { token, user } = res.data || {};
       if (!token || !user) {
-        // A 200 without credentials is a server contract violation, not a login.
         throw new Error("The server did not return a valid session.");
       }
 
@@ -113,8 +109,9 @@ export default function Login() {
         department: user.department || "",
       });
 
+      const targetPath = homePathFor(user.role);
       const from = location.state?.from;
-      navigate(from && from !== "/" ? from : homePathFor(user.role), { replace: true });
+      navigate(from && from !== "/" ? from : targetPath, { replace: true });
       return;
     } catch (err) {
       // A failed sign-in must never fall through to a granted session.
@@ -125,6 +122,15 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDemoLogin = (targetRole) => {
+    setRole(targetRole);
+    const demoEmail = `${targetRole}@smartassess.edu`;
+    const demoPw = "password123";
+    setEmail(demoEmail);
+    setPassword(demoPw);
+    setStatus({ type: "success", text: `Loaded demo ${targetRole} credentials! Click 'Sign in' below.` });
   };
 
   const handleForgotSubmit = (e) => {
@@ -231,6 +237,21 @@ export default function Login() {
                   <span className="role-chip-desc">{r.desc}</span>
                 </button>
               ))}
+            </div>
+
+            <div className="demo-shortcuts" style={{ display: "flex", gap: "8px", margin: "12px 0 16px 0", flexWrap: "wrap" }}>
+              <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", alignSelf: "center", width: "100%", fontWeight: 600 }}>
+                ⚡ Quick Demo Accounts:
+              </span>
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => handleDemoLogin("student")} style={{ flex: 1, fontSize: "0.78rem" }}>
+                🎓 Demo Student
+              </button>
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => handleDemoLogin("faculty")} style={{ flex: 1, fontSize: "0.78rem" }}>
+                👨‍🏫 Demo Faculty
+              </button>
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => handleDemoLogin("admin")} style={{ flex: 1, fontSize: "0.78rem" }}>
+                🛡️ Demo Admin
+              </button>
             </div>
 
             {status.text && (

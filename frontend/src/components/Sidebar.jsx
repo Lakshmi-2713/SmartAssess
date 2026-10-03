@@ -24,22 +24,31 @@ import "../styles/sidebar.css";
  */
 const NAV_BY_ROLE = {
   faculty: [
-    { to: "/faculty", label: "Dashboard", icon: <FaHome /> },
-    { to: "/tests", label: "Test Management", icon: <FaClipboardList /> },
-    { to: "/results", label: "Results & Analytics", icon: <FaChartBar /> },
+    { to: "/faculty", label: "Faculty Dashboard", icon: <FaHome /> },
+    { to: "/faculty?tab=create-test", label: "Create Assessment", icon: <FaClipboardList /> },
+    { to: "/faculty?tab=manage-tests", label: "Manage Assessments", icon: <FaClipboardList /> },
+    { to: "/faculty?tab=questions", label: "Question Management", icon: <FaClipboardList /> },
+    { to: "/faculty?tab=ai-gen", label: "AI Question Gen", icon: <FaClipboardList /> },
+    { to: "/faculty?tab=grading", label: "Evaluation & Grading", icon: <FaChartBar /> },
+    { to: "/faculty?tab=results", label: "Results Management", icon: <FaChartBar /> },
+    { to: "/faculty?tab=analytics", label: "Performance Analytics", icon: <FaChartBar /> },
     { to: "/students", label: "Student Roster", icon: <FaUserGraduate /> },
   ],
   student: [
-    { to: "/student", label: "Dashboard", icon: <FaHome /> },
+    { to: "/student", label: "Student Dashboard", icon: <FaHome /> },
     { to: "/tests", label: "My Assessments", icon: <FaClipboardList /> },
     { to: "/results", label: "My Scorecard", icon: <FaChartBar /> },
   ],
   admin: [
     { to: "/admin", label: "Admin Overview", icon: <FaHome /> },
-    { to: "/students", label: "Student Roster", icon: <FaUserGraduate /> },
-    { to: "/tests", label: "Test Management", icon: <FaClipboardList /> },
-    { to: "/results", label: "Results & Analytics", icon: <FaChartBar /> },
-    { to: "/faculty", label: "Faculty Workspace", icon: <FaUsersCog /> },
+    { to: "/admin?tab=students", label: "Student Management", icon: <FaUserGraduate /> },
+    { to: "/admin?tab=faculty", label: "Faculty Management", icon: <FaUsersCog /> },
+    { to: "/admin?tab=users", label: "User & Role Mgmt", icon: <FaUsersCog /> },
+    { to: "/admin?tab=assessments", label: "Assessment Mgmt", icon: <FaClipboardList /> },
+    { to: "/admin?tab=results", label: "Results & Exports", icon: <FaChartBar /> },
+    { to: "/admin?tab=ai-config", label: "AI Feature Mgmt", icon: <FaUsersCog /> },
+    { to: "/admin?tab=monitoring", label: "Monitoring Logs", icon: <FaChartBar /> },
+    { to: "/admin?tab=sys-settings", label: "System Settings", icon: <FaUsersCog /> },
   ],
 };
 

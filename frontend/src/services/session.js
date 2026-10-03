@@ -65,5 +65,10 @@ export const clearSession = () => {
 };
 
 /** Landing route for a role. */
-export const homePathFor = (role) =>
-  role === "admin" ? "/admin" : role === "student" ? "/student" : "/faculty";
+export const homePathFor = (role) => {
+  const norm = String(role || "").trim().toLowerCase();
+  if (norm === "admin") return "/admin";
+  if (norm === "faculty") return "/faculty";
+  if (norm === "student") return "/student";
+  return "/student";
+};
