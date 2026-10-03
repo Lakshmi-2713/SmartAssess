@@ -35,11 +35,8 @@ export default function RouteGuard({ children, roles }) {
     return <Navigate to="/" replace state={{ from: location.pathname }} />;
   }
 
-  const normalizedUserRole = String(user?.role || "").trim().toLowerCase();
-  const normalizedAllowedRoles = (roles || []).map((r) => String(r).trim().toLowerCase());
-
-  if (normalizedAllowedRoles.length > 0 && !normalizedAllowedRoles.includes(normalizedUserRole)) {
-    return <Navigate to={homePathFor(normalizedUserRole)} replace />;
+  if (roles && roles.length > 0 && !roles.includes(user?.role)) {
+    return <Navigate to={homePathFor(user?.role)} replace />;
   }
 
   return children;

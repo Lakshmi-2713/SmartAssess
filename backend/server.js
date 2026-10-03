@@ -72,12 +72,6 @@ const PORT = process.env.PORT || 5000;
 
 const start = async () => {
   await connectDB();
-  try {
-    const { seedDefaultData } = await import("./utils/seedData.js");
-    await seedDefaultData();
-  } catch (err) {
-    console.warn("Seed data error:", err.message);
-  }
 
   const server = app.listen(PORT, () => {
     console.log(`✅ SmartAssess API listening on http://localhost:${PORT}`);

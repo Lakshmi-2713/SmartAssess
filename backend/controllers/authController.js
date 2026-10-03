@@ -71,28 +71,15 @@ export const login = asyncHandler(async (req, res) => {
     throw ApiError.badRequest("Email and password are required.");
   }
 
-  const normalizedEmail = String(email).trim().toLowerCase();
-  const normalizedRole = role ? String(role).trim().toLowerCase() : null;
-
-  const query = { email: normalizedEmail };
-  if (normalizedRole && VALID_ROLES.includes(normalizedRole)) {
-    query.role = normalizedRole;
-  }
+  const query = { email: String(email).trim().toLowerCase() };
+  if (role) query.role = role;
 
   // `password` is `select: false` on the schema, so ask for it explicitly.
-  let user = await User.findOne(query).select("+password");
+  const user = await User.findOne(query).select("+password");
 
-  if (!user && normalizedRole) {
-    // Check if user exists under a different role to give clear error feedback
-    const anyUser = await User.findOne({ email: normalizedEmail });
-    if (anyUser) {
-      throw ApiError.unauthorized(
-        `This account is registered as '${anyUser.role}', not '${normalizedRole}'. Please select the '${anyUser.role}' role.`
-      );
-    }
-  }
-
-  const invalid = ApiError.unauthorized("Invalid email or password.");
+  // One generic message for both branches: revealing which half was wrong
+  // turns the endpoint into an account-enumeration oracle.
+  const invalid = ApiError.unauthorized("Invalid email, password or role.");
 
   if (!user) throw invalid;
   if (!user.isActive) {
